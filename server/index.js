@@ -37,6 +37,33 @@ async function turnServers() {
         { signal: AbortSignal.timeout(6000) }
       )
       if (r.ok) servers = await r.json()
+    } else if (process.env.METERED_DOMAIN && process.env.METERED_SECRET_KEY) {
+      // mint a short-lived TURN credential with the admin secret key
+      const r = await fetch(
+        `https://${process.env.METERED_DOMAIN}/api/v1/turn/credential?secretKey=${process.env.METERED_SECRET_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expiryInSeconds: 7200, label: 'sable' }),
+          signal: AbortSignal.timeout(6000),
+        }
+      )
+      const cred = await r.json()
+      if (r.ok && cred.username) {
+        servers = [{
+          urls: [
+            'turn:standard.relay.metered.ca:80',
+            'turn:standard.relay.metered.ca:80?transport=tcp',
+            'turn:standard.relay.metered.ca:443',
+            'turns:standard.relay.metered.ca:443?transport=tcp',
+          ],
+          username: cred.username,
+          credential: cred.password,
+        }]
+        turnCache = { at: Date.now() - 1800_000, servers } // refresh well before expiry
+        return servers
+      }
+      console.error('metered mint failed', JSON.stringify(cred).slice(0, 200))
     } else if (process.env.TURN_URLS) {
       servers = [{
         urls: process.env.TURN_URLS.split(','),
