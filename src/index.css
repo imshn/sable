@@ -235,12 +235,10 @@ button:focus-visible {
 
 .shell {
   height: 100dvh;
-  max-width: 1400px;
-  margin: 0 auto;
+  width: 100%;
   display: grid;
-  grid-template-columns: minmax(300px, 380px) 1fr;
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
+  grid-template-columns: minmax(300px, 420px) 1fr;
+  overflow: hidden; /* the page never scrolls — panes scroll internally */
 }
 
 /* ---------- Sidebar ---------- */
@@ -251,6 +249,7 @@ button:focus-visible {
   border-right: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface) 55%, var(--bg));
   min-width: 0;
+  min-height: 0; /* grid children default to min-height auto and overflow the page */
 }
 
 .sidebar-header {
@@ -409,11 +408,41 @@ button:focus-visible {
 /* ---------- Thread ---------- */
 
 .thread {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   background: color-mix(in srgb, var(--surface) 30%, var(--bg));
 }
+
+.messages { min-height: 0; }
+
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(11, 12, 15, 0.75);
+  backdrop-filter: blur(4px);
+  border: 2px dashed var(--accent);
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.drop-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 26px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.drop-inner svg { width: 22px; height: 22px; }
 
 .thread.placeholder { display: grid; place-items: center; }
 

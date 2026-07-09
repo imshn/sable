@@ -23,6 +23,34 @@ const metaTags = (html) => {
 const decodeEntities = (s) =>
   s?.replace(/&(amp|lt|gt|quot|#39|#x27);/g, (m) => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#x27;': "'" })[m])
 
+// TURN credentials for calls across carrier-grade NAT (Jio/Airtel etc).
+// Configure either METERED_DOMAIN + METERED_API_KEY (free tier at metered.ca)
+// or static TURN_URLS + TURN_USERNAME + TURN_CREDENTIAL. Cached ~1 hour.
+let turnCache = { at: 0, servers: [] }
+async function turnServers() {
+  if (Date.now() - turnCache.at < 3600_000) return turnCache.servers
+  let servers = []
+  try {
+    if (process.env.METERED_DOMAIN && process.env.METERED_API_KEY) {
+      const r = await fetch(
+        `https://${process.env.METERED_DOMAIN}/api/v1/turn/credentials?apiKey=${process.env.METERED_API_KEY}`,
+        { signal: AbortSignal.timeout(6000) }
+      )
+      if (r.ok) servers = await r.json()
+    } else if (process.env.TURN_URLS) {
+      servers = [{
+        urls: process.env.TURN_URLS.split(','),
+        username: process.env.TURN_USERNAME,
+        credential: process.env.TURN_CREDENTIAL,
+      }]
+    }
+  } catch (e) {
+    console.error('turn fetch failed', e.message)
+  }
+  turnCache = { at: Date.now(), servers }
+  return servers
+}
+
 // a crashed relay takes every conversation down with it — never die on a bad request
 const BOOT_ID = randomUUID().slice(0, 8)
 process.on('uncaughtException', (e) => console.error('uncaughtException', e))
@@ -35,6 +63,10 @@ const httpServer = createServer(async (req, res) => {
     if (u.pathname === '/healthz') {
       res.writeHead(200)
       return res.end(JSON.stringify({ ok: true, boot: BOOT_ID, up: Math.round(process.uptime()) }))
+    }
+    if (u.pathname === '/turn') {
+      res.setHeader('Content-Type', 'application/json')
+      return res.end(JSON.stringify(await turnServers()))
     }
     if (u.pathname !== '/preview') {
       res.writeHead(404)
@@ -118,6 +150,13 @@ io.on('connection', (socket) => {
   socket.on('hello', async ({ id, name, pubKey }) => {
     if (typeof id !== 'string' || !id || typeof name !== 'string' || !name.trim() || !pubKey) return
     const cleanName = name.trim().slice(0, 32)
+    // one active session per identity: a fresh sign-in replaces the old tab
+    const prev = online.get(id)
+    if (prev && prev.socketId !== socket.id) {
+      const old = io.sockets.sockets.get(prev.socketId)
+      old?.emit('session-replaced')
+      old?.disconnect(true)
+    }
     socket.data.clientId = id
     online.set(id, { socketId: socket.id, name: cleanName, pubKey })
     known.set(id, { name: cleanName, pubKey, lastSeen: Date.now() })

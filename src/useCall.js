@@ -6,20 +6,20 @@ import { startRing, stopRing } from './ring.js'
 // Group calls are a full mesh — fine for the 2–6 people a private group has.
 // ponytail: mesh only; an SFU is the upgrade path if groups grow past ~8.
 // TURN matters in India: Jio/Airtel carrier-grade NAT blocks direct P2P for
-// many pairs — openrelay is a free public TURN that gets those calls through.
-const RTC_CONFIG = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    {
-      urls: [
-        'turn:staticauth.openrelay.metered.ca:80',
-        'turn:staticauth.openrelay.metered.ca:443',
-        'turn:staticauth.openrelay.metered.ca:443?transport=tcp',
-      ],
-      username: 'openrelayproject',
-      credential: 'openrelayprojectsecret',
-    },
-  ],
+// many pairs. The relay's /turn endpoint issues fresh credentials (configured
+// server-side); STUN alone is the fallback if none are configured.
+const RELAY_BASE = import.meta.env.VITE_RELAY_URL ?? ''
+let cachedTurn = null
+async function rtcConfig() {
+  if (!cachedTurn) {
+    try {
+      const r = await fetch(`${RELAY_BASE}/turn`, { signal: AbortSignal.timeout(6000) })
+      cachedTurn = (await r.json()) ?? []
+    } catch {
+      cachedTurn = []
+    }
+  }
+  return { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, ...cachedTurn] }
 }
 
 export function useCall(socketRef, onLog) {
@@ -85,8 +85,8 @@ export function useCall(socketRef, onLog) {
     return stream
   }
 
-  const makePc = (peerId) => {
-    const pc = new RTCPeerConnection(RTC_CONFIG)
+  const makePc = async (peerId) => {
+    const pc = new RTCPeerConnection(await rtcConfig())
     pcs.current.set(peerId, pc)
     localRef.current?.getTracks().forEach((t) => pc.addTrack(t, localRef.current))
     // if a screen share is running, newcomers should see the screen, not the camera
@@ -143,7 +143,7 @@ export function useCall(socketRef, onLog) {
       const cur = callRef.current
       // mesh: an offer for the group call I'm already in — answer silently
       if (group && cur.status === 'active' && cur.groupId === group) {
-        const pc = makePc(from)
+        const pc = await makePc(from)
         await pc.setRemoteDescription(sdp)
         await flushIce(from)
         const answer = await pc.createAnswer()
@@ -204,7 +204,7 @@ export function useCall(socketRef, onLog) {
       const cur = callRef.current
       if (cur.mode !== 'group' || cur.groupId !== groupId || cur.status !== 'active') return
       // existing participants offer to the newcomer
-      const pc = makePc(from)
+      const pc = await makePc(from)
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
       socketRef.current?.emit('call-offer', { to: from, sdp: offer, group: groupId })
@@ -265,7 +265,7 @@ export function useCall(socketRef, onLog) {
       logRef.current?.(peerId, { kind: 'media-error' })
       return
     }
-    const pc = makePc(peerId)
+    const pc = await makePc(peerId)
     const offer = await pc.createOffer()
     await pc.setLocalDescription(offer)
     socketRef.current?.emit('call-offer', { to: peerId, sdp: offer, video })
@@ -302,7 +302,7 @@ export function useCall(socketRef, onLog) {
       setCall({ status: 'active', mode: 'group', groupId, video })
       return
     }
-    const pc = makePc(peerId)
+    const pc = await makePc(peerId)
     await pc.setRemoteDescription(offerRef.current)
     await flushIce(peerId)
     const answer = await pc.createAnswer()

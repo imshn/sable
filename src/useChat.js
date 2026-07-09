@@ -10,18 +10,11 @@ import {
   b64decode,
 } from './crypto.js'
 
-// Persistent identity: same id + same keys across restarts, so history stays
-// readable and friends see one "you" (two tabs in one browser share it).
-export function getClientId() {
-  // ?u=alice forces a separate identity — lets one browser act as two users
-  const forced = new URLSearchParams(location.search).get('u')
-  if (forced) return `u-${forced}`
-  let id = localStorage.getItem('sable-id')
-  if (!id) {
-    id = crypto.randomUUID()
-    localStorage.setItem('sable-id', id)
-  }
-  return id
+// Passwordless identity: your name IS your identity. Entering the same name
+// on any device always resolves to the same user — duplicates are impossible
+// by construction. Only the newest session for a name stays connected.
+export function getClientId(name) {
+  return `n-${name.trim().toLowerCase().replace(/\s+/g, '-')}`
 }
 
 const emptyConvo = () => ({ messages: [], unread: 0, typing: null, lastTs: 0 })
@@ -44,13 +37,14 @@ export function useChat(name) {
   const [convos, setConvos] = useState({})
   const [safetyCode, setSafetyCode] = useState('')
   const [connected, setConnected] = useState(false)
+  const [sessionReplaced, setSessionReplaced] = useState(false)
 
   const socketRef = useRef(null)
   const keyCache = useRef(new Map()) // JSON(jwk) -> Promise<CryptoKey>
   const peerKeyRef = useRef(new Map()) // peerId -> Promise<CryptoKey> (their latest key)
   const selfKeyRef = useRef(null) // Promise<CryptoKey> for own history copies
   const typingTimers = useRef(new Map())
-  const clientId = getClientId()
+  const clientId = getClientId(name)
 
   const patchConvo = (key, fn) =>
     setConvos((c) => ({ ...c, [key]: fn(c[key] ?? emptyConvo()) }))
@@ -127,6 +121,12 @@ export function useChat(name) {
         socket.emit('hello', { id: clientId, name, pubKey })
       })
       socket.on('disconnect', () => alive && setConnected(false))
+
+      socket.on('session-replaced', () => {
+        if (!alive) return
+        socket.disconnect() // don't fight the newer session for the identity
+        setSessionReplaced(true)
+      })
 
       socket.on('directory', async (list) => {
         const { keyFor } = await ready
@@ -352,7 +352,7 @@ export function useChat(name) {
   }, [])
 
   return {
-    clientId, contacts, groups, convos, safetyCode, connected,
+    clientId, contacts, groups, convos, safetyCode, connected, sessionReplaced,
     send, react, deleteForAll, deleteForMe, addLocalEntry,
     createGroup, deleteGroup, leaveGroup, inviteToGroup,
     notifyTyping, markRead, socketRef,

@@ -30,6 +30,26 @@ export const callLogText = (body, peerName) =>
 const isMedia = (m) =>
   !m.deleted && m.body?.t === 'file' && (m.body.mime?.startsWith('image/') || m.body.mime?.startsWith('video/'))
 
+// files -> encrypted-envelope payloads (shared by picker and drag-and-drop)
+async function fileEnvelopes(files, onTooBig) {
+  const out = []
+  for (const f of [...files].slice(0, 5)) {
+    if (f.size > MAX_FILE) {
+      onTooBig?.(f)
+      continue
+    }
+    const buf = await f.arrayBuffer()
+    out.push({
+      t: 'file',
+      name: f.name,
+      mime: f.type || 'application/octet-stream',
+      size: f.size,
+      data: b64encode(buf),
+    })
+  }
+  return out
+}
+
 // URLs in text become safe anchors
 const URL_RE = /(https?:\/\/[^\s<>"']+)/g
 export function Linkified({ text }) {
@@ -369,19 +389,8 @@ function Composer({ target, onSend, onTyping }) {
   }
 
   const sendFiles = async (files) => {
-    for (const f of [...files].slice(0, 5)) {
-      if (f.size > MAX_FILE) {
-        flash(`${f.name} is over 15 MB`)
-        continue
-      }
-      const buf = await f.arrayBuffer()
-      onSend({
-        t: 'file',
-        name: f.name,
-        mime: f.type || 'application/octet-stream',
-        size: f.size,
-        data: b64encode(buf),
-      })
+    for (const env of await fileEnvelopes(files, (f) => flash(`${f.name} is over 15 MB`))) {
+      onSend(env)
     }
   }
 
@@ -548,8 +557,17 @@ export function Thread({
   const [menu, setMenu] = useState(null)
   const [headMenu, setHeadMenu] = useState(false)
   const [lightbox, setLightbox] = useState(null)
+  const [dragOver, setDragOver] = useState(false)
+  const dragDepth = useRef(0)
   const messages = convo?.messages ?? []
   const mediaList = messages.filter(isMedia)
+
+  const onDrop = async (e) => {
+    e.preventDefault()
+    dragDepth.current = 0
+    setDragOver(false)
+    for (const env of await fileEnvelopes(e.dataTransfer.files)) onSend(env)
+  }
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -577,7 +595,21 @@ export function Thread({
       : 'offline'
 
   return (
-    <section className="thread">
+    <section
+      className="thread"
+      onDragEnter={(e) => { e.preventDefault(); if (++dragDepth.current === 1) setDragOver(true) }}
+      onDragOver={(e) => e.preventDefault()}
+      onDragLeave={() => { if (--dragDepth.current <= 0) { dragDepth.current = 0; setDragOver(false) } }}
+      onDrop={onDrop}
+    >
+      {dragOver && (
+        <div className="drop-overlay" aria-hidden="true">
+          <div className="drop-inner">
+            {Icon.clip}
+            Drop to send encrypted
+          </div>
+        </div>
+      )}
       <header className="chat-header">
         <div className="chat-title">
           <button className="icon-btn back-btn" aria-label="Back to chats" onClick={onBack}>

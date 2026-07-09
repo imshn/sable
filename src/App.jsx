@@ -555,7 +555,7 @@ function ForwardPicker({ rows, excludeId, onPick, onClose }) {
 
 function Shell({ name, onSignOut }) {
   const {
-    clientId, contacts, groups, convos, safetyCode, connected,
+    clientId, contacts, groups, convos, safetyCode, connected, sessionReplaced,
     send, react, deleteForAll, deleteForMe, addLocalEntry,
     createGroup, deleteGroup, leaveGroup, inviteToGroup,
     notifyTyping, markRead, socketRef,
@@ -623,6 +623,26 @@ function Shell({ name, onSignOut }) {
       send(targetId, { ...body, fwd: true })
     }
     setActiveId(targetId)
+  }
+
+  if (sessionReplaced) {
+    return (
+      <div className="lobby">
+        <section className="lobby-panel" style={{ margin: 'auto' }}>
+          <form onSubmit={(e) => { e.preventDefault(); location.reload() }}>
+            <h2>Signed in elsewhere</h2>
+            <p className="hint">
+              "{name}" just connected from another tab or device, so this session was closed.
+              Only one active session per name is allowed.
+            </p>
+            <button type="submit" className="primary">
+              Use Sable here instead
+              <span className="btn-icon">{Icon.send}</span>
+            </button>
+          </form>
+        </section>
+      </div>
+    )
   }
 
   return (
