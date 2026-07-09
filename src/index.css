@@ -275,6 +275,10 @@ button:focus-visible {
 /* ---------- Shell ---------- */
 
 .shell {
+  max-width: 1600px;
+  margin: 0 auto;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   height: 100dvh;
   width: 100%;
   display: grid;
@@ -2070,7 +2074,7 @@ video.media { width: min(320px, 62vw); }
   flex: 1;
 }
 
-.search-container {
+.search-container, .requests-container {
   max-width: 600px;
   margin: 0 auto;
 }
@@ -2094,11 +2098,12 @@ video.media { width: min(320px, 62vw); }
 .contact-card-list {
   list-style: none;
   padding: 0;
-  margin: 0;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
   flex: 1;
   width: 100%;
+  max-width: 600px;
   gap: 12px;
 }
 
