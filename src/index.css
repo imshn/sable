@@ -467,7 +467,12 @@ button:focus-visible {
   background: color-mix(in srgb, var(--surface) 30%, var(--bg));
 }
 
-.messages { min-height: 0; }
+.messages {
+  min-height: 0;
+  max-width: 1000px;
+  width: 100%;
+  margin: 0 auto;
+}
 
 .drop-overlay {
   position: absolute;
@@ -753,7 +758,10 @@ button:focus-visible {
   align-items: center;
   gap: 8px;
   padding: 14px clamp(1rem, 3vw, 1.75rem) calc(14px + env(safe-area-inset-bottom));
-  border-top: 1px solid var(--border);
+  max-width: 1000px;
+  width: 100%;
+  margin: 0 auto;
+  border-top: 1px solid transparent;
 }
 
 .composer input[type='text'],
