@@ -172,10 +172,13 @@ export function ProfileSettingsModal({ user, onClose, onUpdateProfile, socket, b
                           border: '2px solid',
                           borderColor: (localStorage.getItem('sable-theme') ?? 'dark') === t ? 'var(--accent)' : 'var(--border)',
                           backgroundColor: 'var(--surface-2)', color: 'var(--text)',
-                          cursor: 'pointer', fontWeight: '500', textTransform: 'capitalize',
+                          cursor: 'pointer', fontWeight: '500',
                         }}
                       >
-                        {t === 'dark' ? '🌙' : '☀️'} {t}
+                        <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                          {t === 'dark' ? Icon.moon : Icon.sun}
+                          <span style={{ textTransform: 'capitalize' }}>{t}</span>
+                        </span>
                       </button>
                     ))}
                   </div>
