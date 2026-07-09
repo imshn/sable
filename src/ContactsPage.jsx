@@ -12,7 +12,6 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
   const pendingRequests = contacts.filter(c => c.status === 'pending' && !c.isRequester)
   const sentRequests = contacts.filter(c => c.status === 'pending' && c.isRequester)
   const acceptedContacts = contacts.filter(c => c.status === 'accepted')
-  const blockedContacts = contacts.filter(c => c.status === 'blocked' && c.isRequester)
 
   useEffect(() => {
     let active = true
@@ -61,7 +60,7 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
               <button className="icon-btn" onClick={() => onVoiceCall(c.id)} title="Voice Call">{Icon.call}</button>
               <button className="icon-btn" onClick={() => onVideoCall(c.id)} title="Video Call">{Icon.video}</button>
               <button className="icon-btn danger" onClick={() => removeContact(c.id)} title="Remove Contact">{Icon.trash}</button>
-              <button className="icon-btn danger" onClick={() => setUserToBlock(c)} title="Block User">{Icon.lock}</button>
+              <button className="icon-btn danger" onClick={() => setUserToBlock(c)} title="Block User">{Icon.block}</button>
             </div>
           </li>
         ))}
@@ -164,27 +163,6 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
     )
   }
 
-  const renderBlocked = () => {
-    if (blockedContacts.length === 0) return <div className="empty-state">No blocked users.</div>
-    return (
-      <ul className="contact-card-list">
-        {blockedContacts.map(c => (
-          <li key={c.id} className="contact-card">
-            <div className="contact-card-info">
-              <span className="avatar">{c.name.slice(0, 2).toUpperCase()}</span>
-              <div className="contact-card-text">
-                <span className="name">{c.name}</span>
-                <span className="username">@{c.username}</span>
-              </div>
-            </div>
-            <div className="contact-card-actions">
-              <button className="secondary" onClick={() => unblockContact(c.id)}>Unblock</button>
-            </div>
-          </li>
-        ))}
-      </ul>
-    )
-  }
 
   return (
     <div className="contacts-page">
@@ -200,16 +178,12 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
           <button className={`tab ${activeTab === 'search' ? 'active' : ''}`} onClick={() => setActiveTab('search')}>
             Search Users
           </button>
-          <button className={`tab ${activeTab === 'blocked' ? 'active' : ''}`} onClick={() => setActiveTab('blocked')}>
-            Blocked
-          </button>
         </div>
       </header>
       <div className="contacts-content">
         {activeTab === 'contacts' && renderContacts()}
         {activeTab === 'requests' && renderRequests()}
         {activeTab === 'search' && renderSearch()}
-        {activeTab === 'blocked' && renderBlocked()}
       </div>
 
       {userToBlock && (

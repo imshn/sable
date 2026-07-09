@@ -869,6 +869,8 @@ function Shell({ name, username, onSignOut }) {
         <ProfileSettingsModal
           user={myProfile || { name, username }}
           socket={socketRef.current}
+          blockedContacts={contacts.filter(c => c.status === 'blocked' && c.isRequester)}
+          unblockContact={unblockContact}
           onUpdateProfile={(profile) => {
             socketRef.current?.emit('update-profile', profile)
           }}

@@ -1045,7 +1045,7 @@ export function Thread({
                   </>
                 ) : (
                   <button type="button" className="drawer-item danger" role="menuitem" onClick={() => { setHeadMenu(false); setBlockModal(true) }}>
-                    <span className="drawer-glyph danger-glyph">{Icon.lock}</span>
+                    <span className="drawer-glyph danger-glyph">{Icon.block}</span>
                     Block {target.name}
                   </button>
                 )}
