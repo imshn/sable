@@ -129,7 +129,7 @@ const previewText = (last, targetName) => {
   return body.text
 }
 
-function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, onShowProfile, safetyCode, connected, onSignOut }) {
+function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, onShowProfile, onShowInvite, safetyCode, connected, onSignOut }) {
   return (
     <aside className="sidebar">
       <header className="sidebar-header">
@@ -146,6 +146,9 @@ function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, onShowPro
           </button>
           <button className="icon-btn subtle" aria-label="New Group" title="New Group" onClick={onNewGroup}>
             {Icon.plus}
+          </button>
+          <button className="icon-btn subtle" aria-label="Invite a friend" title="Invite a friend" onClick={onShowInvite}>
+            {Icon.userPlus}
           </button>
           <button className="icon-btn subtle" aria-label="Contacts" title="Contacts" onClick={() => onSelect('contacts')}>
             {Icon.users}
@@ -659,11 +662,11 @@ function ForwardPicker({ rows, excludeId, onPick, onClose }) {
     </div>
   )
 }
-
 function Shell({ name, username, onSignOut }) {
   const [activeId, setActiveId] = useState('contacts')
   const [creatingGroup, setCreatingGroup] = useState(false)
   const [showProfile, setShowProfile] = useState(false)
+  const [showInviteModal, setShowInviteModal] = useState(false)
   const [addingTo, setAddingTo] = useState(null)
   const [forwarding, setForwarding] = useState(null)
   const [inviteCode, setInviteCode] = useState(() => {
@@ -679,6 +682,64 @@ function Shell({ name, username, onSignOut }) {
     sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, blockContact, unblockContact,
     notifyTyping, markRead, socketRef
   } = chat
+
+  function InviteModal({ socketRef, onClose }) {
+    const [inviteLink, setInviteLink] = useState(null)
+    const [copied, setCopied] = useState(false)
+
+    useEffect(() => {
+      if (!socketRef.current) return
+      
+      const onInviteCreated = ({ code }) => {
+        const baseUrl = window.location.origin
+        setInviteLink(`${baseUrl}/invite/${code}`)
+      }
+      
+      socketRef.current.on('invite-created', onInviteCreated)
+      socketRef.current.emit('create-invite', {})
+      
+      return () => {
+        socketRef.current.off('invite-created', onInviteCreated)
+      }
+    }, [socketRef])
+
+    const copyToClipboard = () => {
+      if (!inviteLink) return
+      navigator.clipboard.writeText(inviteLink)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
+
+    return (
+      <div className="modal-backdrop" onClick={onClose}>
+        <div className="modal" role="dialog" aria-label="Invite a friend" onClick={(e) => e.stopPropagation()}>
+          <header className="modal-head">
+            <h3>Invite a friend</h3>
+            <button className="icon-btn subtle" aria-label="Close" onClick={onClose}>{Icon.x}</button>
+          </header>
+          <p style={{ marginBottom: '16px', color: 'var(--muted)' }}>
+            Share this link with someone to connect with them on Sable.
+          </p>
+          
+          {inviteLink ? (
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input 
+                readOnly 
+                value={inviteLink} 
+                style={{ flex: 1, padding: '8px 12px', fontSize: '14px', borderRadius: 'var(--radius)' }} 
+                onClick={(e) => e.target.select()}
+              />
+              <button className="primary" onClick={copyToClipboard} style={{ padding: '0 16px', height: '48px' }}>
+                {copied ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+          ) : (
+            <p>Generating link...</p>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   useEffect(() => {
     // We now render a ConfirmModal for authError below instead of alert
@@ -750,6 +811,7 @@ function Shell({ name, username, onSignOut }) {
         connected={connected}
         onSignOut={onSignOut}
         onShowProfile={() => setShowProfile(true)}
+        onShowInvite={() => setShowInviteModal(true)}
       />
       <main className="call-stage with-chat">
         {inviteCode ? (
@@ -864,6 +926,9 @@ function Shell({ name, username, onSignOut }) {
           onPick={(targetId) => forward(targetId, forwarding)}
           onClose={() => setForwarding(null)}
         />
+      )}
+      {showInviteModal && (
+        <InviteModal socketRef={socketRef} onClose={() => setShowInviteModal(false)} />
       )}
 
       {showProfile && (
