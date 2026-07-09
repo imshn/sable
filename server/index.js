@@ -25,6 +25,10 @@ const decodeEntities = (s) =>
 const httpServer = createServer(async (req, res) => {
   const u = new URL(req.url, 'http://relay')
   res.setHeader('Access-Control-Allow-Origin', '*')
+  if (u.pathname === '/healthz') {
+    res.writeHead(200)
+    return res.end('ok')
+  }
   if (u.pathname !== '/preview') {
     res.writeHead(404)
     return res.end()
