@@ -1,5 +1,5 @@
 import React from 'react';
-import { LockIcon, SentIcon, ArrowLeft01Icon, Tick01Icon, TickDouble01Icon, Logout01Icon, Attachment01Icon, Location01Icon, Mic01Icon, MicOff01Icon, Video01Icon, VideoOffIcon, CallEnd01Icon, File01Icon, Download01Icon, Cancel01Icon, Image01Icon, MusicNote01Icon, ArrowRight01Icon, Delete01Icon, Copy01Icon, VolumeHighIcon, Target01Icon, GlobeIcon, UserGroupIcon, MoreHorizontalIcon, PlusSignIcon, ComputerScreenShareIcon, ComputerRemoveIcon, UserAdd01Icon, Sun01Icon, RefreshIcon, MailReply01Icon, PencilEdit01Icon, CropIcon, Moon01Icon } from 'hugeicons-react';
+import { LockIcon, SentIcon, ArrowLeft01Icon, Tick01Icon, TickDouble01Icon, Logout01Icon, Attachment01Icon, Location01Icon, Mic01Icon, MicOff01Icon, Video01Icon, VideoOffIcon, CallEnd01Icon, Call02Icon, File01Icon, Download01Icon, Cancel01Icon, Image01Icon, MusicNote01Icon, ArrowRight01Icon, Delete01Icon, Copy01Icon, VolumeHighIcon, Target01Icon, GlobeIcon, UserGroupIcon, MoreHorizontalIcon, PlusSignIcon, ComputerScreenShareIcon, ComputerRemoveIcon, UserAdd01Icon, Sun01Icon, RefreshIcon, MailReply01Icon, PencilEdit01Icon, CropIcon, Moon01Icon } from 'hugeicons-react';
 
 const wrap = (IconComponent) => <IconComponent size={24} strokeWidth={1.8} color="currentColor" />;
 
@@ -16,6 +16,7 @@ export const Icon = {
   micOff: wrap(MicOff01Icon),
   video: wrap(Video01Icon),
   videoOff: wrap(VideoOffIcon),
+  call: wrap(Call02Icon),
   phoneEnd: wrap(CallEnd01Icon),
   file: wrap(File01Icon),
   download: wrap(Download01Icon),
