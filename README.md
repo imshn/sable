@@ -53,11 +53,19 @@ Vite + React client, socket.io relay. The server never sees plaintext.
 
 ## Deployment
 
-Frontend: https://sable-chat.vercel.app (static, Vercel).
-The socket.io relay needs a persistent host (Vercel functions can't hold
-WebSockets or share the in-memory registry). Host `server/index.js` anywhere
-Node runs, then set `VITE_RELAY_URL=https://your-relay` in Vercel env and
-redeploy — link previews use the same host via `/preview`.
+- Frontend: https://sable-chat.vercel.app (static, Vercel)
+- Relay: Render free tier via [render.yaml](render.yaml) — one-click:
+  https://render.com/deploy?repo=https://github.com/imshn/sable
+- Vercel env `VITE_RELAY_URL` points the frontend at the relay
+  (currently `https://sable-relay.onrender.com`).
+
+Vercel alone can't host the relay: its functions cannot hold WebSocket
+connections and don't share the in-memory presence/group registry.
+Calls use free openrelay TURN servers so WebRTC connects across
+carrier-grade NAT (Jio/Airtel mobile networks).
+
+Free-tier caveat: the Render relay sleeps after ~15 idle minutes; the
+first visitor after a quiet spell waits ~30–60s while it wakes.
 
 ### Testing on two devices
 
