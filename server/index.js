@@ -22,19 +22,24 @@ const metaTags = (html) => {
 const decodeEntities = (s) =>
   s?.replace(/&(amp|lt|gt|quot|#39|#x27);/g, (m) => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#x27;': "'" })[m])
 
+// a crashed relay takes every conversation down with it — never die on a bad request
+const BOOT_ID = randomUUID().slice(0, 8)
+process.on('uncaughtException', (e) => console.error('uncaughtException', e))
+process.on('unhandledRejection', (e) => console.error('unhandledRejection', e))
+
 const httpServer = createServer(async (req, res) => {
-  const u = new URL(req.url, 'http://relay')
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  if (u.pathname === '/healthz') {
-    res.writeHead(200)
-    return res.end('ok')
-  }
-  if (u.pathname !== '/preview') {
-    res.writeHead(404)
-    return res.end()
-  }
-  res.setHeader('Content-Type', 'application/json')
   try {
+    const u = new URL(req.url, 'http://relay')
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    if (u.pathname === '/healthz') {
+      res.writeHead(200)
+      return res.end(JSON.stringify({ ok: true, boot: BOOT_ID, up: Math.round(process.uptime()) }))
+    }
+    if (u.pathname !== '/preview') {
+      res.writeHead(404)
+      return res.end()
+    }
+    res.setHeader('Content-Type', 'application/json')
     const target = new URL(u.searchParams.get('url'))
     if (!/^https?:$/.test(target.protocol)) throw new Error('bad protocol')
     const r = await fetch(target, {

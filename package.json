@@ -2,6 +2,9 @@
   "name": "sable",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "concurrently -k -n server,client -c cyan,magenta \"node server/index.js\" \"vite\"",
     "server": "node server/index.js",
