@@ -209,4 +209,4 @@ io.on('connection', (socket) => {
   })
 })
 
-httpServer.listen(PORT, () => console.log(`sable relay listening on :${PORT}`))
+httpServer.listen(PORT, '0.0.0.0', () => console.log(`sable relay listening on :${PORT}`))
