@@ -119,7 +119,18 @@ export async function migrate() {
       peer_id TEXT NOT NULL,
       deleted_at INTEGER NOT NULL,
       PRIMARY KEY (user_id, peer_id)
-    )`
+    )`,
+    // Web Push subscriptions — one row per browser/device that opted in.
+    // Only ever targeted when that user has zero live socket connections.
+    `CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions(user_id)`
   ], 'write')
 
   // Safely add columns using a helper that swallows "column already exists" errors
@@ -337,6 +348,16 @@ export const store = {
     return r.rows
   },
 
+  // peerId -> deletedAt, so a reconnecting client can re-hide history it
+  // already cleared (the server can't filter this itself: a self-sent
+  // message's "which conversation" tag lives inside the ciphertext, not a
+  // DB column, so the client re-applies the cutoff after decrypting).
+  getDeletedConversations: async (userId) => {
+    if (!db) return []
+    const r = await db.execute({ sql: `SELECT peer_id, deleted_at FROM deleted_conversations WHERE user_id=?`, args: [userId] })
+    return r.rows
+  },
+
   // Soft-delete: mark that a user has deleted their side of a conversation.
   // Messages are only purged from DB when BOTH sides have deleted.
   deleteConversation: async (userId, peerId) => {
@@ -447,12 +468,6 @@ export const store = {
       args: [userId, exceptSessionId]
     })),
 
-  revokeAllSessions: (userId) =>
-    db && safe(db.execute({
-      sql: `UPDATE user_sessions SET revoked=1 WHERE user_id=?`,
-      args: [userId]
-    })),
-
   // ---- Passkeys ----
   savePasskey: (id, userId, credentialId, publicKey, counter, deviceType, backedUp, transports) =>
     db && safe(db.execute({
@@ -487,4 +502,21 @@ export const store = {
       sql: `DELETE FROM passkey_credentials WHERE credential_id=? AND user_id=?`,
       args: [credentialId, userId]
     })),
+
+  // ---- Push subscriptions ----
+  savePushSubscription: (id, userId, endpoint, p256dh, auth) =>
+    db && safe(db.execute({
+      sql: `INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id, p256dh=excluded.p256dh, auth=excluded.auth`,
+      args: [id, userId, endpoint, p256dh, auth, Date.now()]
+    })),
+
+  getPushSubscriptions: async (userId) => {
+    if (!db) return []
+    const r = await db.execute({ sql: `SELECT * FROM push_subscriptions WHERE user_id=?`, args: [userId] })
+    return r.rows
+  },
+
+  deletePushSubscription: (endpoint) =>
+    db && safe(db.execute({ sql: `DELETE FROM push_subscriptions WHERE endpoint=?`, args: [endpoint] })),
 }

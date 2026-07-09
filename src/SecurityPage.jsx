@@ -10,10 +10,14 @@ const RELATIVE = (ts) => {
   return new Date(Number(ts)).toLocaleDateString()
 }
 
-export function SecurityPage({ socket }) {
+const deviceLabel = (t) => (t === 'singleDevice' ? 'This device only' : t === 'multiDevice' ? 'Synced (phone/cloud)' : 'Unknown type')
+
+export function SecurityPage({ socket, passkeys, onFetchPasskeys, onDeletePasskey, onRegisterPasskey }) {
   const [sessions, setSessions] = useState(null)
   const [revoking, setRevoking] = useState(null)
   const [confirmed, setConfirmed] = useState(false)
+  const [addingPasskey, setAddingPasskey] = useState(false)
+  const [passkeyMsg, setPasskeyMsg] = useState(null) // { text, error }
 
   useEffect(() => {
     if (!socket) return
@@ -22,6 +26,19 @@ export function SecurityPage({ socket }) {
     socket.emit('get-sessions', (s) => setSessions(s))
     return () => socket.off('sessions', handle)
   }, [socket])
+
+  useEffect(() => {
+    onFetchPasskeys?.()
+  }, [onFetchPasskeys])
+
+  const addPasskey = async () => {
+    setAddingPasskey(true)
+    setPasskeyMsg(null)
+    const res = await onRegisterPasskey?.()
+    setAddingPasskey(false)
+    if (res?.ok) setPasskeyMsg({ text: 'Passkey added — future logins for this username will require it.' })
+    else if (res?.error !== 'Cancelled') setPasskeyMsg({ text: res?.error ?? 'Could not add passkey', error: true })
+  }
 
   const revoke = (sessionId) => {
     setRevoking(sessionId)
@@ -41,6 +58,60 @@ export function SecurityPage({ socket }) {
 
   return (
     <div style={{ maxWidth: 540, display: 'flex', flexDirection: 'column', gap: 32 }}>
+
+      {/* Passkeys */}
+      <div className="settings-section">
+        <div className="settings-section-title">
+          <span className="settings-section-icon">{Icon.key}</span>
+          Passkeys
+        </div>
+        <p className="empty-sub" style={{ marginTop: 0, marginBottom: 12 }}>
+          {passkeys?.length
+            ? 'Your username is locked to these passkeys — logging in anywhere else requires one of them.'
+            : "Anyone who types your username can currently sign in as you. Add a passkey to require your device's biometrics or PIN instead."}
+        </p>
+
+        {passkeys === null ? (
+          <p className="empty-sub">Loading…</p>
+        ) : passkeys.length === 0 ? null : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }}>
+            {passkeys.map((pk) => (
+              <div key={pk.id} className="session-card">
+                <div className="session-card-icon">{Icon.key}</div>
+                <div className="session-card-body">
+                  <span className="session-device">{deviceLabel(pk.deviceType)}</span>
+                  <span className="session-meta">Added {RELATIVE(pk.createdAt)}</span>
+                  {pk.lastUsed && <span className="session-meta">Last used {RELATIVE(pk.lastUsed)}</span>}
+                </div>
+                <button
+                  type="button"
+                  className="secondary danger-btn"
+                  style={{ flexShrink: 0, padding: '6px 14px', fontSize: '0.8rem' }}
+                  onClick={() => onDeletePasskey?.(pk.credentialId)}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {passkeyMsg && (
+          <p className="hint" style={{ color: passkeyMsg.error ? 'var(--danger)' : 'var(--accent)', marginBottom: 12 }}>
+            {passkeyMsg.text}
+          </p>
+        )}
+
+        <button
+          type="button"
+          className="secondary"
+          style={{ width: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 20px' }}
+          disabled={addingPasskey}
+          onClick={addPasskey}
+        >
+          {Icon.key} {addingPasskey ? 'Follow your browser\'s prompt…' : 'Add a passkey'}
+        </button>
+      </div>
 
       {/* Current session */}
       <div className="settings-section">

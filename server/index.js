@@ -5,6 +5,11 @@ import { Server } from 'socket.io'
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { migrate, store } from './db.js'
+import {
+  makeRegistrationOptions, checkRegistration,
+  makeAuthenticationOptions, checkAuthentication, toB64,
+} from './webauthn.js'
+import { vapidPublicKey, sendPush } from './push.js'
 
 const PORT = process.env.PORT || 3001
 
@@ -100,6 +105,11 @@ const httpServer = createServer(async (req, res) => {
       return res.end(JSON.stringify(await turnServers()))
     }
 
+    if (u.pathname === '/vapid-key') {
+      res.setHeader('Content-Type', 'application/json')
+      return res.end(JSON.stringify({ publicKey: vapidPublicKey }))
+    }
+
     if (u.pathname === '/api/search') {
       res.setHeader('Content-Type', 'application/json')
       const q = u.searchParams.get('q')
@@ -152,6 +162,10 @@ const groups = new Map()  // groupId  -> { name, owner, members: Set<clientId> }
 // Privacy settings cache to avoid hitting DB on every message
 const privacyCache = new Map() // clientId -> privacy_settings row
 
+// WebAuthn ceremony challenges: identity -> { challenge, at }. Short-lived
+// (5 min) and single-flight per identity; see freshChallenge() below.
+const webauthnChallenges = new Map()
+
 await migrate()
 for (const u of await store.allUsers()) {
   known.set(u.id, { name: u.name, pubKey: JSON.parse(u.pubkey), lastSeen: Number(u.last_seen) })
@@ -187,6 +201,21 @@ const notifyPresence = async (userId, onlineState, lastSeen) => {
       online: showOnline ? onlineState : false,
       lastSeen: showLastSeen ? lastSeen : null,
     })
+  }
+}
+
+// Buzzes a device when the app itself can't: zero live sockets for this
+// user, so no in-app UI is around to show anything. Payload is metadata
+// only (sender name, never message text) — the server still can't read
+// message content, so it can't put it in a push either.
+async function notifyOffline(userId, prefKey, payload) {
+  if (online.has(userId)) return
+  const prefs = await store.getNotificationPrefs(userId)
+  if (prefs && prefs[prefKey] === 0) return
+  const subs = await store.getPushSubscriptions(userId)
+  for (const sub of subs) {
+    const result = await sendPush(sub, payload)
+    if (result.expired) store.deletePushSubscription(sub.endpoint)
   }
 }
 
@@ -237,29 +266,17 @@ io.on('connection', (socket) => {
     ) || null
   }
 
-  // ---- hello (auth + session creation) ----
-  socket.on('hello', async ({ id, name, username, pubKey }) => {
-    if (typeof id !== 'string' || !id || typeof name !== 'string' || !name.trim() || !pubKey) return
-    const cleanName = name.trim().slice(0, 32)
-    const cleanUsername = typeof username === 'string' ? username.trim().toLowerCase().slice(0, 32) : `user_${id.slice(0, 6)}`
-
-    const isAvailable = await store.checkUsernameAvailable(cleanUsername, id)
-    if (!isAvailable) {
-      socket.emit('auth-error', 'Username is already taken')
-      return
-    }
-
-    // One active session per identity
+  // Shared by plain login and passkey-verified login: creates the session
+  // record, warms caches, and sends the initial state batch.
+  const establishSession = async ({ id, cleanName, cleanUsername, pubKey }) => {
     const prev = online.get(id)
     if (prev && prev.socketId !== socket.id) {
       const old = io.sockets.sockets.get(prev.socketId)
       old?.emit('session-replaced')
       old?.disconnect(true)
-      // Revoke the old session
       if (prev.sessionId) store.revokeSession(prev.sessionId, id)
     }
 
-    // Create a new session record
     const sessionId = randomUUID()
     socket.data.clientId = id
     socket.data.sessionId = sessionId
@@ -269,7 +286,6 @@ io.on('connection', (socket) => {
     known.set(id, { name: cleanName, username: cleanUsername, pubKey, lastSeen: Date.now() })
     store.upsertUser(id, cleanName, JSON.stringify(pubKey), cleanUsername)
 
-    // Warm privacy cache
     const privacy = await store.getPrivacySettings(id)
     privacyCache.set(id, privacy)
 
@@ -280,6 +296,10 @@ io.on('connection', (socket) => {
     for (const [gid, g] of groups) {
       if (g.members.has(id)) socket.emit('group-added', groupInfo(gid))
     }
+
+    const deletedRows = await store.getDeletedConversations(id)
+    const deletedAt = Object.fromEntries(deletedRows.map((r) => [r.peer_id, Number(r.deleted_at)]))
+    socket.emit('deleted-conversations', deletedAt)
 
     const rows = await store.backlog(id)
     const undelivered = await store.undeliveredSenders(id)
@@ -301,14 +321,151 @@ io.on('connection', (socket) => {
     const myProfile = await store.getUser(id)
     if (myProfile) socket.emit('profile', myProfile)
 
-    // Send privacy settings + notification prefs
     socket.emit('privacy-settings', privacy)
     const notifPrefs = await store.getNotificationPrefs(id)
     socket.emit('notification-prefs', notifPrefs)
+  }
+
+  // ---- hello (auth + session creation) ----
+  socket.on('hello', async ({ id, name, username, pubKey }) => {
+    if (typeof id !== 'string' || !id || typeof name !== 'string' || !name.trim() || !pubKey) return
+    const cleanName = name.trim().slice(0, 32)
+    const cleanUsername = typeof username === 'string' ? username.trim().toLowerCase().slice(0, 32) : `user_${id.slice(0, 6)}`
+
+    const isAvailable = await store.checkUsernameAvailable(cleanUsername, id)
+    if (!isAvailable) {
+      socket.emit('auth-error', 'Username is already taken')
+      return
+    }
+
+    // A registered passkey gates entry: proving the name is not enough once
+    // one exists. The client completes the ceremony, then calls
+    // webauthn-login-verify, which establishes the session on success.
+    const passkeys = await store.getPasskeysByUser(id)
+    if (passkeys.length > 0 && !socket.data.passkeyVerified) {
+      socket.emit('passkey-required', { id })
+      return
+    }
+
+    await establishSession({ id, cleanName, cleanUsername, pubKey })
   })
 
   const clientId = () => socket.data.clientId
   const myPub = () => JSON.stringify(online.get(clientId())?.pubKey ?? null)
+
+  // ---- passkeys ----
+  // Challenges are short-lived and keyed by the identity attempting to
+  // register/authenticate; one in-flight ceremony per identity at a time.
+  const CHALLENGE_TTL = 300_000
+  const freshChallenge = (key) => {
+    const entry = webauthnChallenges.get(key)
+    if (!entry || Date.now() - entry.at > CHALLENGE_TTL) return null
+    return entry.challenge
+  }
+
+  socket.on('webauthn-login-options', async ({ id }, cb) => {
+    if (typeof cb !== 'function' || typeof id !== 'string') return
+    const passkeys = await store.getPasskeysByUser(id)
+    if (!passkeys.length) return cb({ noPasskey: true })
+    const options = await makeAuthenticationOptions(passkeys)
+    webauthnChallenges.set(id, { challenge: options.challenge, at: Date.now() })
+    cb({ options })
+  })
+
+  socket.on('webauthn-login-verify', async ({ id, name, username, pubKey, response }, cb) => {
+    if (typeof cb !== 'function' || typeof id !== 'string') return
+    const expectedChallenge = freshChallenge(id)
+    if (!expectedChallenge) return cb({ ok: false, error: 'This login attempt expired — try again' })
+    const passkeyRow = await store.getPasskeyByCredentialId(response?.id)
+    if (!passkeyRow || passkeyRow.user_id !== id) return cb({ ok: false, error: 'Unrecognized passkey' })
+
+    let verification
+    try {
+      verification = await checkAuthentication(response, expectedChallenge, passkeyRow)
+    } catch (e) {
+      return cb({ ok: false, error: 'Passkey verification failed' })
+    }
+    webauthnChallenges.delete(id)
+    if (!verification.verified) return cb({ ok: false, error: 'Passkey verification failed' })
+
+    store.updatePasskeyCounter(passkeyRow.credential_id, verification.authenticationInfo.newCounter)
+    socket.data.passkeyVerified = true
+    await establishSession({
+      id,
+      cleanName: (name || '').trim().slice(0, 32) || id,
+      cleanUsername: (username || '').trim().toLowerCase().slice(0, 32) || id,
+      pubKey,
+    })
+    cb({ ok: true })
+  })
+
+  socket.on('webauthn-register-options', async (_data, cb) => {
+    const from = clientId()
+    if (!from || typeof cb !== 'function') return
+    const existing = await store.getPasskeysByUser(from)
+    const username = online.get(from)?.username ?? from
+    const options = await makeRegistrationOptions(username, existing)
+    webauthnChallenges.set(from, { challenge: options.challenge, at: Date.now() })
+    cb({ options })
+  })
+
+  socket.on('webauthn-register-verify', async ({ response }, cb) => {
+    const from = clientId()
+    if (!from || typeof cb !== 'function') return
+    const expectedChallenge = freshChallenge(from)
+    if (!expectedChallenge) return cb({ ok: false, error: 'This registration attempt expired — try again' })
+
+    let verification
+    try {
+      verification = await checkRegistration(response, expectedChallenge)
+    } catch (e) {
+      return cb({ ok: false, error: 'Could not verify passkey' })
+    }
+    webauthnChallenges.delete(from)
+    if (!verification.verified) return cb({ ok: false, error: 'Could not verify passkey' })
+
+    const { credential, credentialDeviceType, credentialBackedUp } = verification.registrationInfo
+    store.savePasskey(
+      randomUUID(), from, credential.id, toB64(credential.publicKey),
+      credential.counter, credentialDeviceType, credentialBackedUp, credential.transports
+    )
+    cb({ ok: true })
+  })
+
+  const passkeySummary = (rows) =>
+    rows.map((r) => ({ id: r.id, credentialId: r.credential_id, deviceType: r.device_type, createdAt: Number(r.created_at), lastUsed: r.last_used ? Number(r.last_used) : null }))
+
+  socket.on('get-passkeys', async (_data, cb) => {
+    const from = clientId()
+    if (!from || typeof cb !== 'function') return
+    cb(passkeySummary(await store.getPasskeysByUser(from)))
+  })
+
+  socket.on('delete-passkey', async ({ credentialId }) => {
+    const from = clientId()
+    if (!from || !credentialId) return
+    await store.deletePasskey(credentialId, from)
+    socket.emit('passkeys', passkeySummary(await store.getPasskeysByUser(from)))
+  })
+
+  // ---- delete chat (soft, per-side; see getDeletedConversations comment) ----
+  socket.on('delete-conversation', async ({ peerId }) => {
+    const from = clientId()
+    if (!from || !peerId) return
+    await store.deleteConversation(from, peerId)
+  })
+
+  // ---- push subscriptions ----
+  socket.on('save-push-subscription', async ({ subscription }) => {
+    const from = clientId()
+    if (!from || !subscription?.endpoint || !subscription.keys?.p256dh || !subscription.keys?.auth) return
+    store.savePushSubscription(randomUUID(), from, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth)
+  })
+
+  socket.on('delete-push-subscription', async ({ endpoint }) => {
+    if (!endpoint) return
+    await store.deletePushSubscription(endpoint)
+  })
 
   // ---- contacts ----
 
@@ -329,6 +486,11 @@ io.on('connection', (socket) => {
     await store.upsertContact(from, to, 'pending')
     const target = online.get(to)
     if (target) io.to(target.socketId).emit('contact-updated', await getContactsWithPresence(to))
+    else notifyOffline(to, 'contact_requests', {
+      title: 'New contact request',
+      body: `${online.get(from)?.name ?? 'Someone'} wants to connect`,
+      tag: `contact-${from}`, url: '/',
+    })
     socket.emit('contact-updated', await getContactsWithPresence(from))
   })
 
@@ -562,7 +724,14 @@ io.on('connection', (socket) => {
     const from = clientId()
     if (!from || !msg?.to) return
     const target = online.get(msg.to)
-    if (!target) return
+    if (!target) {
+      notifyOffline(msg.to, 'calls', {
+        title: 'Missed call',
+        body: `${online.get(from)?.name ?? 'Someone'} tried to call you`,
+        tag: `call-${from}`, url: '/',
+      })
+      return
+    }
     const contact = await getContact(from, msg.to)
     if (!contact || contact.status !== 'accepted') return
 
@@ -591,6 +760,12 @@ io.on('connection', (socket) => {
     const wasRouted = !!recipient
     if (recipient) {
       io.to(recipient.socketId).emit('dm', { from, fromName: online.get(from)?.name, id, payload, ts })
+    } else {
+      notifyOffline(to, 'messages', {
+        title: online.get(from)?.name ?? 'New message',
+        body: 'Sent you a message',
+        tag: `dm-${from}`, url: '/',
+      })
     }
     if (known.has(to) || wasRouted) {
       store.saveMessage(id, to, from, myPub(), null, JSON.stringify(payload), ts, false)
@@ -661,10 +836,14 @@ io.on('connection', (socket) => {
     }
   })
 
-  socket.on('gdm', ({ groupId, id, payloads, ts }) => {
+  // mentions travels as plaintext member-id list alongside the (still
+  // per-member-encrypted) payloads — purely so the server can route a
+  // "you were mentioned" push without ever seeing message content.
+  socket.on('gdm', ({ groupId, id, payloads, ts, mentions }) => {
     const from = clientId()
     const g = groups.get(groupId)
     if (!from || !g || !g.members.has(from) || !payloads) return
+    const mentioned = new Set(Array.isArray(mentions) ? mentions : [])
     for (const [memberId, payload] of Object.entries(payloads)) {
       if (!g.members.has(memberId)) continue
       if (memberId === from) {
@@ -673,6 +852,19 @@ io.on('connection', (socket) => {
       }
       const u = online.get(memberId)
       if (u) io.to(u.socketId).emit('gdm', { groupId, from, fromName: online.get(from)?.name, id, payload, ts })
+      else if (mentioned.has(memberId)) {
+        notifyOffline(memberId, 'mentions', {
+          title: g.name,
+          body: `${online.get(from)?.name ?? 'Someone'} mentioned you`,
+          tag: `mention-${groupId}`, url: '/',
+        })
+      } else {
+        notifyOffline(memberId, 'messages', {
+          title: g.name,
+          body: `${online.get(from)?.name ?? 'Someone'} sent a message`,
+          tag: `group-${groupId}`, url: '/',
+        })
+      }
       store.saveMessage(id, memberId, from, myPub(), groupId, JSON.stringify(payload), ts, !!u)
     }
   })

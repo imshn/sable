@@ -20,9 +20,25 @@ function Toggle({ label, description, value, onChange }) {
   )
 }
 
-export function NotificationPrefsPage({ socket }) {
+export function NotificationPrefsPage({ socket, pushEnabled, onEnablePush, onDisablePush }) {
   const [prefs, setPrefs] = useState(null)
   const [saved, setSaved] = useState(false)
+  const [pushBusy, setPushBusy] = useState(false)
+  const [pushMsg, setPushMsg] = useState(null)
+  const pushUnsupported = typeof window !== 'undefined' && !('serviceWorker' in navigator && 'PushManager' in window)
+  const pushBlocked = typeof Notification !== 'undefined' && Notification.permission === 'denied'
+
+  const togglePush = async () => {
+    setPushBusy(true)
+    setPushMsg(null)
+    if (pushEnabled) {
+      await onDisablePush?.()
+    } else {
+      const ok = await onEnablePush?.()
+      if (!ok) setPushMsg(pushBlocked ? 'Notifications are blocked for this site in your browser settings.' : 'Could not enable notifications.')
+    }
+    setPushBusy(false)
+  }
 
   useEffect(() => {
     if (!socket) return
@@ -44,6 +60,32 @@ export function NotificationPrefsPage({ socket }) {
 
   return (
     <div style={{ maxWidth: 520, display: 'flex', flexDirection: 'column', gap: 28 }}>
+      <div className="settings-section">
+        <div className="settings-section-title">
+          <span className="settings-section-icon">{Icon.bell}</span>
+          Push Notifications
+        </div>
+        <p className="empty-sub" style={{ marginTop: 0, marginBottom: 12 }}>
+          {pushUnsupported
+            ? "This browser doesn't support push notifications."
+            : pushEnabled
+              ? "You'll get notified on this device even when Sable isn't open."
+              : 'Turn this on to get notified here even when the tab is closed.'}
+        </p>
+        {pushMsg && <p className="hint" style={{ color: 'var(--danger)', marginBottom: 12 }}>{pushMsg}</p>}
+        {!pushUnsupported && (
+          <button
+            type="button"
+            className="secondary"
+            style={{ width: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 20px' }}
+            disabled={pushBusy || pushBlocked}
+            onClick={togglePush}
+          >
+            {Icon.bell} {pushBusy ? 'Working…' : pushEnabled ? 'Disable on this device' : 'Enable on this device'}
+          </button>
+        )}
+      </div>
+
       <div className="settings-section">
         <div className="settings-section-title">
           <span className="settings-section-icon">{Icon.bell}</span>

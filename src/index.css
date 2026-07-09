@@ -1832,6 +1832,22 @@ video.media { width: min(320px, 62vw); }
   white-space: pre-wrap;
 }
 
+/* ---------- Mentions ---------- */
+
+.mention-tag {
+  color: var(--accent);
+  font-weight: 600;
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 0 3px;
+}
+
+.mention-drawer {
+  bottom: 52px;
+  min-width: 180px;
+  max-width: 260px;
+}
+
 /* ---------- Replies ---------- */
 
 .quote {

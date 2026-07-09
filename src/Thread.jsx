@@ -338,19 +338,36 @@ function SendPreview({ file, remaining, onSend, onCancel }) {
   )
 }
 
-// URLs in text become safe anchors
+// URLs become safe anchors; @mentions (when the message carries a mentions
+// list) become highlighted tags. Both share one pass so ranges never overlap.
 const URL_RE = /(https?:\/\/[^\s<>"']+)/g
-export function Linkified({ text }) {
-  const parts = text.split(URL_RE)
-  return parts.map((part, i) =>
-    /^https?:\/\//.test(part) ? (
-      <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="msg-link">
-        {part}
-      </a>
-    ) : (
-      part
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+export function Linkified({ text, mentions }) {
+  const names = mentions?.length
+    ? [...new Set(mentions.map((m) => m.name))].sort((a, b) => b.length - a.length).map(escapeRe)
+    : []
+  const re = names.length
+    ? new RegExp(`(https?://[^\\s<>"']+)|(@(?:${names.join('|')})\\b)`, 'g')
+    : new RegExp(URL_RE.source, 'g')
+
+  const nodes = []
+  let last = 0
+  let key = 0
+  let m
+  while ((m = re.exec(text))) {
+    if (m.index > last) nodes.push(text.slice(last, m.index))
+    nodes.push(
+      m[0].startsWith('@') ? (
+        <span key={key++} className="mention-tag">{m[0]}</span>
+      ) : (
+        <a key={key++} href={m[0]} target="_blank" rel="noopener noreferrer" className="msg-link">{m[0]}</a>
+      )
     )
-  )
+    last = re.lastIndex
+  }
+  if (last < text.length) nodes.push(text.slice(last))
+  return nodes
 }
 
 // OG-card preview for the first link in a message, WhatsApp style.
@@ -457,11 +474,11 @@ function MessageBody({ body, onOpenMedia }) {
     )
   }
   const firstUrl = body.text.match(URL_RE)?.[0]
-  if (!firstUrl) return body.text
+  if (!firstUrl) return <Linkified text={body.text} mentions={body.mentions} />
   return (
     <span className="text-with-preview">
       <LinkPreview url={firstUrl} />
-      <span><Linkified text={body.text} /></span>
+      <span><Linkified text={body.text} mentions={body.mentions} /></span>
     </span>
   )
 }
@@ -655,17 +672,22 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
   const [note, setNote] = useState('')
   const [menu, setMenu] = useState(null)
   const [locModal, setLocModal] = useState(false)
+  const [mentionQuery, setMentionQuery] = useState(null) // null = dropdown closed
+  const [mentioned, setMentioned] = useState(new Map()) // id -> name, for this draft
   // three static inputs with fixed accepts — mutating one input's accept right
   // before .click() is flaky in Safari, so each category gets its own element
   const photosRef = useRef(null)
   const audioRef = useRef(null)
   const docsRef = useRef(null)
   const inputRef = useRef(null)
+  const mentionStart = useRef(0)
 
   useEffect(() => {
     setDraft('')
     setNote('')
     setMenu(null)
+    setMentionQuery(null)
+    setMentioned(new Map())
     inputRef.current?.focus()
   }, [target.id])
 
@@ -689,10 +711,57 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
 
   const submit = (e) => {
     e.preventDefault()
-    if (!draft.trim()) return
-    onSend({ t: 'text', text: draft.trim() })
+    const text = draft.trim()
+    if (!text) return
+    // only keep mentions whose @name is still actually in the text — covers
+    // the user deleting an inserted mention by hand afterward
+    const mentions = target.isGroup
+      ? [...mentioned].filter(([, name]) => text.includes(`@${name}`)).map(([id, name]) => ({ id, name }))
+      : []
+    onSend({ t: 'text', text, ...(mentions.length ? { mentions } : {}) })
     setDraft('')
+    setMentioned(new Map())
   }
+
+  // @mentions: only relevant in groups. Detects an "@" that starts a word
+  // (start of message or after whitespace) with no space typed since.
+  const onDraftChange = (e) => {
+    const value = e.target.value
+    const cursor = e.target.selectionStart
+    setDraft(value)
+    onTyping()
+    if (!target.isGroup) return
+    const uptoCursor = value.slice(0, cursor)
+    const atIndex = uptoCursor.lastIndexOf('@')
+    const charBefore = atIndex > 0 ? uptoCursor[atIndex - 1] : ''
+    if (atIndex === -1 || /\s/.test(uptoCursor.slice(atIndex + 1)) || (charBefore && !/\s/.test(charBefore))) {
+      setMentionQuery(null)
+      return
+    }
+    mentionStart.current = atIndex
+    setMentionQuery(uptoCursor.slice(atIndex + 1))
+  }
+
+  const pickMention = (member) => {
+    const before = draft.slice(0, mentionStart.current)
+    const after = draft.slice(mentionStart.current + 1 + mentionQuery.length)
+    const insertion = `@${member.name} `
+    setDraft(before + insertion + after)
+    setMentioned((prev) => new Map(prev).set(member.id, member.name))
+    setMentionQuery(null)
+    requestAnimationFrame(() => {
+      const pos = before.length + insertion.length
+      inputRef.current?.focus()
+      inputRef.current?.setSelectionRange(pos, pos)
+    })
+  }
+
+  const mentionCandidates =
+    mentionQuery !== null
+      ? (target.members ?? [])
+          .filter((m) => m.name.toLowerCase().includes(mentionQuery.toLowerCase()))
+          .slice(0, 6)
+      : []
 
   const sendFiles = (files) => {
     const ok = [...files].slice(0, 5).filter((f) => {
@@ -834,14 +903,33 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
         )}
       </div>
 
-      <input
-        ref={inputRef}
-        value={draft}
-        onChange={(e) => { setDraft(e.target.value); onTyping() }}
-        placeholder={target.online || target.isGroup ? 'Write privately…' : `${target.name} is offline — they'll get it when back`}
-        aria-label="Message"
-        autoComplete="off"
-      />
+      <div className="composer-anchor" style={{ flex: 1 }}>
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={onDraftChange}
+          onKeyDown={(e) => { if (e.key === 'Escape') setMentionQuery(null) }}
+          placeholder={target.online || target.isGroup ? 'Write privately…' : `${target.name} is offline — they'll get it when back`}
+          aria-label="Message"
+          autoComplete="off"
+        />
+        {mentionQuery !== null && mentionCandidates.length > 0 && (
+          <div className="drawer mention-drawer" role="menu">
+            {mentionCandidates.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                className="drawer-item"
+                role="menuitem"
+                onClick={() => pickMention(m)}
+              >
+                <span className="avatar small-avatar" aria-hidden="true">{m.name.slice(0, 2).toUpperCase()}</span>
+                {m.name}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       {draft.trim() ? (
         <button type="submit" className="primary send" aria-label="Send message">
           {Icon.send}
@@ -862,7 +950,8 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
 // target: { id, name, online, isGroup, members?, owner?, mine? }
 export function Thread({
   target, convo, clientId, onBack, onSend, onTyping, onStartCall, callBusy,
-  onReact, onDeleteMe, onDeleteAll, onForward, onLeaveGroup, onDeleteGroup, onAddMembers, onBlock, onUnblock, socketRef,
+  onReact, onDeleteMe, onDeleteAll, onForward, onLeaveGroup, onDeleteGroup, onAddMembers, onBlock, onUnblock,
+  onDeleteConversation, socketRef,
 }) {
   const scrollRef = useRef(null)
   const [menu, setMenu] = useState(null)
@@ -873,6 +962,7 @@ export function Thread({
   const [replyTo, setReplyTo] = useState(null) // { id, name, preview }
   const [blockModal, setBlockModal] = useState(false)
   const [reportModal, setReportModal] = useState(false)
+  const [deleteChatModal, setDeleteChatModal] = useState(false)
   const swipe = useRef(null)
   const dragDepth = useRef(0)
   const messages = convo?.messages ?? []
@@ -1045,21 +1135,29 @@ export function Thread({
                       </button>
                     )}
                   </>
-                ) : target.status === 'blocked' && target.isRequester ? (
-                  <button type="button" className="drawer-item" role="menuitem" onClick={() => { setHeadMenu(false); onUnblock?.(target.id) }}>
-                    <span className="drawer-glyph">{Icon.check}</span>
-                    Unblock {target.name}
-                  </button>
                 ) : (
                   <>
-                    <button type="button" className="drawer-item danger" role="menuitem" onClick={() => { setHeadMenu(false); setBlockModal(true) }}>
-                      <span className="drawer-glyph danger-glyph">{Icon.block}</span>
-                      Block {target.name}
+                    <button type="button" className="drawer-item" role="menuitem" onClick={() => { setHeadMenu(false); setDeleteChatModal(true) }}>
+                      <span className="drawer-glyph">{Icon.trash}</span>
+                      Delete chat
                     </button>
-                    <button type="button" className="drawer-item danger" role="menuitem" onClick={() => { setHeadMenu(false); setReportModal(true) }}>
-                      <span className="drawer-glyph danger-glyph">{Icon.flag}</span>
-                      Report {target.name}
-                    </button>
+                    {target.status === 'blocked' && target.isRequester ? (
+                      <button type="button" className="drawer-item" role="menuitem" onClick={() => { setHeadMenu(false); onUnblock?.(target.id) }}>
+                        <span className="drawer-glyph">{Icon.check}</span>
+                        Unblock {target.name}
+                      </button>
+                    ) : (
+                      <>
+                        <button type="button" className="drawer-item danger" role="menuitem" onClick={() => { setHeadMenu(false); setBlockModal(true) }}>
+                          <span className="drawer-glyph danger-glyph">{Icon.block}</span>
+                          Block {target.name}
+                        </button>
+                        <button type="button" className="drawer-item danger" role="menuitem" onClick={() => { setHeadMenu(false); setReportModal(true) }}>
+                          <span className="drawer-glyph danger-glyph">{Icon.flag}</span>
+                          Report {target.name}
+                        </button>
+                      </>
+                    )}
                   </>
                 )}
               </div>
@@ -1236,6 +1334,16 @@ export function Thread({
           targetId={target.id}
           socket={socketRef?.current}
           onClose={() => setReportModal(false)}
+        />
+      )}
+      {deleteChatModal && (
+        <ConfirmModal
+          title="Delete chat"
+          message={`Delete your history with ${target.name}? This only clears it on your side — they'll keep their copy, and new messages still come through.`}
+          confirmText="Delete"
+          danger={true}
+          onConfirm={() => { onDeleteConversation?.(target.id); setDeleteChatModal(false) }}
+          onCancel={() => setDeleteChatModal(false)}
         />
       )}
     </section>

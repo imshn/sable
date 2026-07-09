@@ -9,6 +9,7 @@ import {
   fingerprint,
   b64decode,
 } from './crypto.js'
+import { currentPushSubscription, subscribeToPush, unsubscribeFromPush } from './push.js'
 
 // Passwordless identity: your name IS your identity. Entering the same name
 // on any device always resolves to the same user — duplicates are impossible
@@ -40,12 +41,18 @@ export function useChat(name, username) {
   const [sessionReplaced, setSessionReplaced] = useState(false)
   const [authError, setAuthError] = useState(null)
   const [myProfile, setMyProfile] = useState(null)
-  
+  const [passkeyRequired, setPasskeyRequired] = useState(false)
+  const [passkeyError, setPasskeyError] = useState(null)
+  const [passkeys, setPasskeys] = useState(null)
+  const [pushEnabled, setPushEnabled] = useState(false)
+
   const socketRef = useRef(null)
   const keyCache = useRef(new Map()) // JSON(jwk) -> Promise<CryptoKey>
   const peerKeyRef = useRef(new Map()) // peerId -> Promise<CryptoKey> (their latest key)
   const selfKeyRef = useRef(null) // Promise<CryptoKey> for own history copies
   const typingTimers = useRef(new Map())
+  const pubKeyRef = useRef(null) // this device's exported public key, for the passkey retry
+  const deletedAtRef = useRef(new Map()) // peerId -> ts; backlog rows at/before this are hidden
   // Use username as the primary identity key if available, otherwise name
   const clientId = getClientId(username || name)
 
@@ -105,6 +112,7 @@ export function useChat(name, username) {
     const ready = (async () => {
       const keyPair = await loadKeyPair()
       const pubKey = await exportPublicKey(keyPair)
+      pubKeyRef.current = pubKey
       selfKeyRef.current = deriveSharedKey(keyPair.privateKey, pubKey)
       fingerprint(pubKey).then((code) => alive && setSafetyCode(code))
       const keyFor = (jwk) => {
@@ -124,6 +132,14 @@ export function useChat(name, username) {
         setConnected(true)
         setAuthError(null)
         socket.emit('hello', { id: clientId, name, username, pubKey })
+
+        // re-assert an existing subscription in case the relay's DB doesn't
+        // have it anymore (e.g. restarted with a fresh database)
+        const existing = await currentPushSubscription()
+        if (alive && existing) {
+          setPushEnabled(true)
+          socket.emit('save-push-subscription', { subscription: existing.toJSON() })
+        }
       })
       socket.on('disconnect', () => alive && setConnected(false))
 
@@ -137,6 +153,21 @@ export function useChat(name, username) {
         if (!alive) return
         socket.disconnect() // don't fight the newer session for the identity
         setSessionReplaced(true)
+      })
+
+      socket.on('passkey-required', () => {
+        if (!alive) return
+        setPasskeyRequired(true)
+      })
+
+      socket.on('deleted-conversations', (map) => {
+        if (!alive) return
+        deletedAtRef.current = new Map(Object.entries(map ?? {}).map(([k, v]) => [k, Number(v)]))
+      })
+
+      socket.on('passkeys', (rows) => {
+        if (!alive) return
+        setPasskeys(rows)
       })
 
       const parseContacts = (list) => {
@@ -196,6 +227,8 @@ export function useChat(name, username) {
           }
           const convoKey = row.groupId ?? (row.from === clientId ? env._to : row.from)
           if (!convoKey) continue
+          const deletedAt = deletedAtRef.current.get(convoKey)
+          if (deletedAt && row.ts <= deletedAt) continue // hidden by a "delete chat"
           const convo = convoOf(convoKey)
           if (env.t === 'react') {
             const reactor = row.from === clientId ? 'me' : row.from
@@ -332,7 +365,11 @@ export function useChat(name, username) {
         )
         if (sealed) payloads[m.id] = sealed
       }
-      socket.emit('gdm', { groupId: target, id: msgId, payloads, ts })
+      // mentions ride outside the encryption boundary too (plaintext member
+      // ids only, never message text) purely so the server can route a
+      // "you were mentioned" push without decrypting anything.
+      const mentions = Array.isArray(env.mentions) ? env.mentions.map((m) => m.id) : undefined
+      socket.emit('gdm', { groupId: target, id: msgId, payloads, ts, mentions })
     } else {
       const sealed = await sealWith(peerKeyRef.current.get(target), env)
       if (!sealed) return
@@ -426,11 +463,88 @@ export function useChat(name, username) {
     socketRef.current?.emit('contact-unblock', { to })
   }, [])
 
+  // Deletes my side of a conversation's history. The peer relationship and
+  // any future messages are unaffected — this only clears what's shown.
+  const deleteConversation = useCallback((peerId) => {
+    socketRef.current?.emit('delete-conversation', { peerId })
+    deletedAtRef.current.set(peerId, Date.now())
+    patchConvo(peerId, () => emptyConvo())
+  }, [])
+
+  // Retries login after the server reports this identity has a passkey.
+  // Runs the WebAuthn assertion ceremony, then re-authenticates over the
+  // same socket; on success the server sends the full session as normal.
+  const retryWithPasskey = useCallback(async () => {
+    const socket = socketRef.current
+    if (!socket) return
+    setPasskeyError(null)
+    try {
+      const { startAuthentication } = await import('@simplewebauthn/browser')
+      const optionsRes = await new Promise((resolve) => socket.emit('webauthn-login-options', { id: clientId }, resolve))
+      if (optionsRes?.noPasskey) {
+        setPasskeyRequired(false) // stale — proceed as a normal login
+        socket.emit('hello', { id: clientId, name, username, pubKey: pubKeyRef.current })
+        return
+      }
+      const response = await startAuthentication({ optionsJSON: optionsRes.options })
+      const verifyRes = await new Promise((resolve) =>
+        socket.emit('webauthn-login-verify', { id: clientId, name, username, pubKey: pubKeyRef.current, response }, resolve)
+      )
+      if (verifyRes?.ok) setPasskeyRequired(false)
+      else setPasskeyError(verifyRes?.error ?? 'Passkey verification failed')
+    } catch (e) {
+      // user cancelled the browser prompt, or no authenticator available
+      setPasskeyError(e?.code === 'ERROR_CEREMONY_ABORTED' ? 'Cancelled' : e?.message ?? 'Passkey login failed')
+    }
+  }, [clientId, name, username])
+
+  const enablePush = useCallback(async () => {
+    const sub = await subscribeToPush()
+    if (!sub) return false
+    socketRef.current?.emit('save-push-subscription', { subscription: sub.toJSON() })
+    setPushEnabled(true)
+    return true
+  }, [])
+
+  const disablePush = useCallback(async () => {
+    const sub = await unsubscribeFromPush()
+    if (sub) socketRef.current?.emit('delete-push-subscription', { endpoint: sub.endpoint })
+    setPushEnabled(false)
+  }, [])
+
+  const fetchPasskeys = useCallback(() => {
+    socketRef.current?.emit('get-passkeys', null, (rows) => setPasskeys(rows))
+  }, [])
+
+  const deletePasskey = useCallback((credentialId) => {
+    socketRef.current?.emit('delete-passkey', { credentialId })
+  }, [])
+
+  // Registers a new passkey for the *currently logged-in* identity. After
+  // this succeeds, future logins for this username require it.
+  const registerPasskey = useCallback(async () => {
+    const socket = socketRef.current
+    if (!socket) return { ok: false, error: 'Not connected' }
+    try {
+      const { startRegistration } = await import('@simplewebauthn/browser')
+      const optionsRes = await new Promise((resolve) => socket.emit('webauthn-register-options', null, resolve))
+      if (!optionsRes?.options) return { ok: false, error: 'Could not start registration' }
+      const response = await startRegistration({ optionsJSON: optionsRes.options })
+      const verifyRes = await new Promise((resolve) => socket.emit('webauthn-register-verify', { response }, resolve))
+      if (verifyRes?.ok) fetchPasskeys()
+      return verifyRes ?? { ok: false, error: 'No response' }
+    } catch (e) {
+      return { ok: false, error: e?.code === 'ERROR_CEREMONY_ABORTED' ? 'Cancelled' : e?.message ?? 'Could not add passkey' }
+    }
+  }, [fetchPasskeys])
+
   return {
     clientId, contacts, groups, convos, safetyCode, connected, sessionReplaced, authError, myProfile,
-    send, react, deleteForAll, deleteForMe, addLocalEntry,
+    passkeyRequired, passkeyError, passkeys, pushEnabled,
+    send, react, deleteForAll, deleteForMe, addLocalEntry, deleteConversation,
     createGroup, deleteGroup, leaveGroup, inviteToGroup,
     sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, blockContact, unblockContact,
+    retryWithPasskey, fetchPasskeys, deletePasskey, registerPasskey, enablePush, disablePush,
     notifyTyping, markRead, socketRef,
   }
 }

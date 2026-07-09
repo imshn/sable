@@ -670,9 +670,11 @@ function Shell({ name, username, onSignOut }) {
   const chat = useChat(name, username)
   const {
     clientId, contacts, groups, convos, connected, safetyCode, sessionReplaced, authError, myProfile,
-    send, react, deleteForAll, deleteForMe, addLocalEntry,
+    passkeyRequired, passkeyError, passkeys, pushEnabled,
+    send, react, deleteForAll, deleteForMe, addLocalEntry, deleteConversation,
     createGroup, deleteGroup, leaveGroup, inviteToGroup,
     sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, blockContact, unblockContact,
+    retryWithPasskey, fetchPasskeys, deletePasskey, registerPasskey, enablePush, disablePush,
     notifyTyping, markRead, socketRef
   } = chat
 
@@ -791,6 +793,32 @@ function Shell({ name, username, onSignOut }) {
     )
   }
 
+  if (passkeyRequired) {
+    return (
+      <div className="lobby">
+        <section className="lobby-panel" style={{ margin: 'auto' }}>
+          <form onSubmit={(e) => { e.preventDefault(); retryWithPasskey() }}>
+            <h2>Verify it's you</h2>
+            <p className="hint">
+              "{username || name}" is protected by a passkey. Use it to continue —
+              this is what keeps someone else from signing in as you just by knowing your name.
+            </p>
+            {passkeyError && passkeyError !== 'Cancelled' && (
+              <p className="hint" style={{ color: 'var(--danger)' }}>{passkeyError}</p>
+            )}
+            <button type="submit" className="primary">
+              Continue with passkey
+              <span className="btn-icon">{Icon.key}</span>
+            </button>
+            <button type="button" className="secondary" style={{ marginTop: 10 }} onClick={onSignOut}>
+              Use a different name instead
+            </button>
+          </form>
+        </section>
+      </div>
+    )
+  }
+
   return (
     <div className={`shell ${activeId ? 'thread-open' : ''}`}>
       <Sidebar
@@ -887,6 +915,7 @@ function Shell({ name, username, onSignOut }) {
             onAddMembers={() => setAddingTo(activeId)}
             onBlock={(id) => { blockContact(id); setActiveId(null) }}
             onUnblock={(id) => unblockContact(id)}
+            onDeleteConversation={(id) => { deleteConversation(id); setActiveId(null) }}
             socketRef={socketRef}
           />
         ) : (
@@ -931,6 +960,13 @@ function Shell({ name, username, onSignOut }) {
           socket={socketRef.current}
           blockedContacts={contacts.filter(c => c.status === 'blocked' && c.isRequester)}
           unblockContact={unblockContact}
+          passkeys={passkeys}
+          onFetchPasskeys={fetchPasskeys}
+          onDeletePasskey={deletePasskey}
+          onRegisterPasskey={registerPasskey}
+          pushEnabled={pushEnabled}
+          onEnablePush={enablePush}
+          onDisablePush={disablePush}
           onShowInvite={() => { setShowProfile(false); setShowInviteModal(true) }}
           onSignOut={onSignOut}
           onUpdateProfile={(profile) => {

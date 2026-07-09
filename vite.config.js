@@ -8,6 +8,7 @@ export default defineConfig({
       '/socket.io': { target: 'http://localhost:3001', ws: true },
       '/preview': { target: 'http://localhost:3001' },
       '/turn': { target: 'http://localhost:3001' },
+      '/api': { target: 'http://localhost:3001' },
     },
   },
 })

@@ -12,7 +12,7 @@ const TABS = [
   { id: 'general',       label: 'General',         icon: 'settings' },
 ]
 
-export function ProfileSettingsModal({ user, onClose, onUpdateProfile, socket, blockedContacts = [], unblockContact, onShowInvite, onSignOut }) {
+export function ProfileSettingsModal({ user, onClose, onUpdateProfile, socket, blockedContacts = [], unblockContact, onShowInvite, onSignOut, passkeys, onFetchPasskeys, onDeletePasskey, onRegisterPasskey, pushEnabled, onEnablePush, onDisablePush }) {
   const [activeTab, setActiveTab] = useState('profile')
   const [name, setName] = useState(user?.name || '')
   const [username, setUsername] = useState(user?.username || '')
@@ -159,10 +159,25 @@ export function ProfileSettingsModal({ user, onClose, onUpdateProfile, socket, b
             {activeTab === 'privacy' && <PrivacySettingsPage socket={socket} />}
 
             {/* NOTIFICATIONS TAB */}
-            {activeTab === 'notifications' && <NotificationPrefsPage socket={socket} />}
+            {activeTab === 'notifications' && (
+              <NotificationPrefsPage
+                socket={socket}
+                pushEnabled={pushEnabled}
+                onEnablePush={onEnablePush}
+                onDisablePush={onDisablePush}
+              />
+            )}
 
             {/* SECURITY TAB */}
-            {activeTab === 'security' && <SecurityPage socket={socket} />}
+            {activeTab === 'security' && (
+              <SecurityPage
+                socket={socket}
+                passkeys={passkeys}
+                onFetchPasskeys={onFetchPasskeys}
+                onDeletePasskey={onDeletePasskey}
+                onRegisterPasskey={onRegisterPasskey}
+              />
+            )}
 
             {/* GENERAL TAB */}
             {activeTab === 'general' && (
