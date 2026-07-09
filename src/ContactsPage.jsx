@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Icon } from './icons.jsx'
 
-export function ContactsPage({ contacts, onChat, onVoiceCall, onVideoCall, sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, socketRef }) {
+export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoCall, sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, socketRef }) {
   const [activeTab, setActiveTab] = useState('contacts') // contacts, requests, search
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
@@ -12,28 +12,32 @@ export function ContactsPage({ contacts, onChat, onVoiceCall, onVideoCall, sendC
   const acceptedContacts = contacts.filter(c => c.status === 'accepted')
 
   useEffect(() => {
-    const socket = socketRef.current
-    if (!socket) return
-    const handleResults = (results) => {
-      setSearchResults(results)
-      setIsSearching(false)
-    }
-    socket.on('search-results', handleResults)
-    return () => socket.off('search-results', handleResults)
-  }) // Run on every render to ensure it attaches if socketRef.current was initially null but is now populated
-
-  useEffect(() => {
+    let active = true
     if (activeTab === 'search' && searchQuery.trim().length >= 2) {
       setIsSearching(true)
-      const timer = setTimeout(() => {
-        socketRef.current?.emit('search-users', searchQuery)
+      const timer = setTimeout(async () => {
+        try {
+          const baseUrl = import.meta.env.VITE_RELAY_URL || ''
+          const res = await fetch(`${baseUrl}/api/search?q=${encodeURIComponent(searchQuery)}`)
+          if (res.ok && active) {
+            const data = await res.json()
+            setSearchResults(data.filter(u => u.id !== clientId))
+          }
+        } catch (e) {
+          console.error('search error', e)
+        } finally {
+          if (active) setIsSearching(false)
+        }
       }, 500)
-      return () => clearTimeout(timer)
+      return () => {
+        active = false
+        clearTimeout(timer)
+      }
     } else {
       setSearchResults([])
       setIsSearching(false)
     }
-  }, [searchQuery, activeTab, socketRef])
+  }, [searchQuery, activeTab, clientId])
 
   const renderContacts = () => {
     if (acceptedContacts.length === 0) return <div className="empty-state">No contacts yet.</div>

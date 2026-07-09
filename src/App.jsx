@@ -792,6 +792,7 @@ function Shell({ name, username, onSignOut }) {
           />
         ) : activeId === 'contacts' ? (
           <ContactsPage 
+            clientId={clientId}
             contacts={contacts} 
             onChat={(id) => setActiveId(id)}
             onVoiceCall={(id) => startCall(id, false)}

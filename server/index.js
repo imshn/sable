@@ -74,6 +74,15 @@ const httpServer = createServer(async (req, res) => {
       res.setHeader('Content-Type', 'application/json')
       return res.end(JSON.stringify(await turnServers()))
     }
+    if (u.pathname === '/api/search') {
+      res.setHeader('Content-Type', 'application/json')
+      const q = u.searchParams.get('q')
+      if (typeof q !== 'string' || q.trim().length < 2) return res.end('[]')
+      const cleanQuery = q.trim().replace(/^@/, '')
+      if (cleanQuery.length < 2) return res.end('[]')
+      const results = await store.searchUsers(cleanQuery)
+      return res.end(JSON.stringify(results))
+    }
     if (u.pathname !== '/preview') {
       res.writeHead(404)
       return res.end()
@@ -216,16 +225,7 @@ io.on('connection', (socket) => {
   const clientId = () => socket.data.clientId
   const myPub = () => JSON.stringify(online.get(clientId())?.pubKey ?? null)
 
-  // ----- user search & contacts -----
-  socket.on('search-users', async (query) => {
-    const from = clientId()
-    if (!from || typeof query !== 'string' || query.trim().length < 2) return
-    const cleanQuery = query.trim().replace(/^@/, '')
-    if (cleanQuery.length < 2) return
-    const results = await store.searchUsers(cleanQuery)
-    // Exclude self
-    socket.emit('search-results', results.filter(u => u.id !== from))
-  })
+  // ----- user contacts -----
 
   socket.on('contact-request', async ({ to }) => {
     const from = clientId()
