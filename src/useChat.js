@@ -94,6 +94,7 @@ export function useChat(name) {
     let alive = true
     const socket = import.meta.env.VITE_RELAY_URL ? io(import.meta.env.VITE_RELAY_URL) : io()
     socketRef.current = socket
+    if (import.meta.env.DEV) window.__sableSocket = socket // dev-only debugging handle
 
     // Listeners must attach synchronously: the socket starts connecting the
     // moment io() returns, and events that land while keys load in IndexedDB

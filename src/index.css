@@ -1624,6 +1624,38 @@ video.media { width: min(320px, 62vw); }
 
 .chat-toast strong { color: var(--accent); margin-right: 6px; }
 
+/* ---------- Connection quality ---------- */
+
+.quality {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: default;
+}
+
+.q-bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 11px; }
+.q-bars i { width: 3px; border-radius: 1px; background: currentColor; opacity: 0.35 }
+.q-bars i:nth-child(1) { height: 4px; }
+.q-bars i:nth-child(2) { height: 7px; }
+.q-bars i:nth-child(3) { height: 11px; }
+
+.quality.q-excellent { color: var(--accent); }
+.quality.q-excellent .q-bars i { opacity: 1; }
+.quality.q-good { color: #eab308; }
+.quality.q-good .q-bars i:nth-child(-n+2) { opacity: 1; }
+.quality.q-poor { color: var(--danger); }
+.quality.q-poor .q-bars i:nth-child(1) { opacity: 1; }
+
+.bw-toast { border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+
 @media (max-width: 860px) {
   .call-stage.with-chat .call-main { display: none; }
   .call-chat { width: 100%; border-left: none; }

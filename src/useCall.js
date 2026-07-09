@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { startRing, stopRing } from './ring.js'
+import { debug } from './log.js'
 
 // WebRTC calls: 1:1 and group mesh. Media is peer-to-peer and DTLS-SRTP
 // encrypted by the browser; the relay only carries SDP/ICE and ring events.
@@ -22,7 +23,7 @@ async function rtcConfig() {
   return { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, ...cachedTurn] }
 }
 
-export function useCall(socketRef, onLog) {
+export function useCall(socketRef, myId, onLog) {
   // { status:'idle' } | { status:'incoming'|'outgoing'|'active', mode:'direct'|'group', peerId?, groupId?, video }
   const [call, setCall] = useState({ status: 'idle' })
   const [localStream, setLocalStream] = useState(null)
@@ -31,6 +32,11 @@ export function useCall(socketRef, onLog) {
   const [camOn, setCamOn] = useState(true)
   const [sharing, setSharing] = useState(false)
   const [sharers, setSharers] = useState({}) // remote peerId -> true
+  const [quality, setQuality] = useState(null) // { level, rttMs, lossPct, kbps }
+  const [lowBandwidth, setLowBandwidth] = useState(false)
+  const restartAttempts = useRef(new Map()) // peerId -> count
+  const statsPrev = useRef(new Map()) // peerId -> { lost, received, bytes, ts }
+  const lowBwStreak = useRef(0)
 
   const pcs = useRef(new Map()) // peerId -> RTCPeerConnection
   const pendingIce = useRef(new Map()) // peerId -> [candidates]
@@ -51,6 +57,68 @@ export function useCall(socketRef, onLog) {
     return stopRing
   }, [call.status])
 
+  // Connection health: sample getStats every 2s across all peers, report the
+  // worst link (RTT / packet loss / inbound bitrate), and drop our own video
+  // after three consecutive starved samples so audio survives bad networks.
+  useEffect(() => {
+    if (call.status !== 'active') return
+    const LEVELS = { excellent: 2, good: 1, poor: 0 }
+    const interval = setInterval(async () => {
+      let worst = null
+      for (const [peerId, pc] of pcs.current) {
+        if (pc.connectionState !== 'connected') continue
+        let stats
+        try {
+          stats = await pc.getStats()
+        } catch {
+          continue
+        }
+        let rtt = null
+        let lost = 0
+        let received = 0
+        let bytes = 0
+        stats.forEach((s) => {
+          if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded' && s.currentRoundTripTime != null) {
+            rtt = s.currentRoundTripTime * 1000
+          }
+          if (s.type === 'inbound-rtp') {
+            lost += s.packetsLost ?? 0
+            received += s.packetsReceived ?? 0
+            bytes += s.bytesReceived ?? 0
+          }
+        })
+        const prev = statsPrev.current.get(peerId)
+        statsPrev.current.set(peerId, { lost, received, bytes, ts: Date.now() })
+        if (!prev) continue
+        const dLost = Math.max(0, lost - prev.lost)
+        const dRecv = Math.max(0, received - prev.received)
+        const lossPct = dLost + dRecv > 0 ? (dLost / (dLost + dRecv)) * 100 : 0
+        const kbps = Math.round(Math.max(0, ((bytes - prev.bytes) * 8) / (Date.now() - prev.ts)))
+        const level =
+          lossPct > 6 || (rtt ?? 0) > 500 ? 'poor' : lossPct > 2 || (rtt ?? 0) > 250 ? 'good' : 'excellent'
+        const sample = { level, rttMs: rtt != null ? Math.round(rtt) : null, lossPct: +lossPct.toFixed(1), kbps }
+        if (!worst || LEVELS[sample.level] < LEVELS[worst.level]) worst = sample
+      }
+      if (!worst) return
+      setQuality(worst)
+
+      // audio-only fallback: starved link while our camera is still sending
+      const sendingVideo = localRef.current?.getVideoTracks().some((t) => t.enabled)
+      if (worst.level === 'poor' && worst.kbps < 120 && sendingVideo && !screenRef.current) {
+        lowBwStreak.current++
+        if (lowBwStreak.current >= 3) {
+          debug('low bandwidth — dropping to audio only', worst)
+          localRef.current.getVideoTracks().forEach((t) => { t.enabled = false })
+          setCamOn(false)
+          setLowBandwidth(true)
+        }
+      } else {
+        lowBwStreak.current = 0
+      }
+    }, 2000)
+    return () => clearInterval(interval)
+  }, [call.status])
+
   const teardown = useCallback(() => {
     pcs.current.forEach((pc) => pc.close())
     pcs.current.clear()
@@ -67,8 +135,49 @@ export function useCall(socketRef, onLog) {
     setCamOn(true)
     setSharing(false)
     setSharers({})
+    setQuality(null)
+    setLowBandwidth(false)
+    restartAttempts.current.clear()
+    statsPrev.current.clear()
+    lowBwStreak.current = 0
     setCall({ status: 'idle' })
   }, [])
+
+  // ICE failure recovery: restart + renegotiate instead of dropping the call.
+  // Only the peer with the lexically smaller id initiates, so both sides
+  // detecting the failure never produce colliding offers (no glare).
+  const attemptRestart = async (peerId) => {
+    const cur = callRef.current
+    const pc = pcs.current.get(peerId)
+    if (!pc || (cur.status !== 'active' && cur.status !== 'outgoing')) return
+    const n = (restartAttempts.current.get(peerId) ?? 0) + 1
+    restartAttempts.current.set(peerId, n)
+    if (n > 3) {
+      debug('ice restart gave up for', peerId)
+      if (cur.mode === 'direct') {
+        logEnd('ended')
+        teardown()
+      } else {
+        dropPeer(peerId)
+      }
+      return
+    }
+    if (!(myId < peerId)) return // the other side initiates
+    debug('ice restart attempt', n, 'for', peerId)
+    try {
+      pc.restartIce()
+      const offer = await pc.createOffer()
+      await pc.setLocalDescription(offer)
+      socketRef.current?.emit('call-offer', {
+        to: peerId,
+        sdp: offer,
+        restart: true,
+        group: cur.mode === 'group' ? cur.groupId : undefined,
+      })
+    } catch (e) {
+      debug('ice restart error', e.message)
+    }
+  }
 
   const logEnd = (kind) => {
     const { peerId, groupId, status } = callRef.current
@@ -98,13 +207,14 @@ export function useCall(socketRef, onLog) {
     pc.onicecandidate = (e) =>
       e.candidate && socketRef.current?.emit('call-ice', { to: peerId, candidate: e.candidate })
     pc.ontrack = (e) => setRemoteStreams((s) => ({ ...s, [peerId]: e.streams[0] }))
+    pc.oniceconnectionstatechange = () => {
+      debug('ice', peerId, pc.iceConnectionState)
+      if (pc.iceConnectionState === 'failed') attemptRestart(peerId)
+      if (['connected', 'completed'].includes(pc.iceConnectionState)) restartAttempts.current.set(peerId, 0)
+    }
     pc.onconnectionstatechange = () => {
-      if (!['failed', 'closed'].includes(pc.connectionState)) return
-      dropPeer(peerId)
-      if (callRef.current.mode === 'direct') {
-        logEnd('ended')
-        teardown()
-      }
+      debug('conn', peerId, pc.connectionState)
+      if (pc.connectionState === 'failed') attemptRestart(peerId)
     }
     return pc
   }
@@ -139,8 +249,19 @@ export function useCall(socketRef, onLog) {
     const socket = socketRef.current
     if (!socket) return
 
-    const onOffer = async ({ from, sdp, video, group }) => {
+    const onOffer = async ({ from, sdp, video, group, restart }) => {
       const cur = callRef.current
+      // renegotiation after an ICE restart — answer on the existing connection
+      if (restart) {
+        const pc = pcs.current.get(from)
+        if (!pc) return
+        debug('answering ice restart from', from)
+        await pc.setRemoteDescription(sdp)
+        const answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+        socket.emit('call-answer', { to: from, sdp: answer })
+        return
+      }
       // mesh: an offer for the group call I'm already in — answer silently
       if (group && cur.status === 'active' && cur.groupId === group) {
         const pc = await makePc(from)
@@ -161,7 +282,7 @@ export function useCall(socketRef, onLog) {
 
     const onAnswer = async ({ from, sdp }) => {
       const pc = pcs.current.get(from)
-      if (!pc) return
+      if (!pc || pc.signalingState !== 'have-local-offer') return
       await pc.setRemoteDescription(sdp)
       await flushIce(from)
       if (callRef.current.mode === 'direct' && callRef.current.status === 'outgoing') {
@@ -335,6 +456,8 @@ export function useCall(socketRef, onLog) {
   const toggleCam = useCallback(() => {
     localRef.current?.getVideoTracks().forEach((t) => { t.enabled = !t.enabled })
     setCamOn((v) => !v)
+    setLowBandwidth(false) // turning the camera back on is an explicit override
+    lowBwStreak.current = 0
   }, [])
 
   // swap the outgoing video track on every connection; browser picker offers
@@ -389,7 +512,7 @@ export function useCall(socketRef, onLog) {
   }, [socketRef]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
-    call, localStream, remoteStreams, micOn, camOn, sharing, sharers,
+    call, localStream, remoteStreams, micOn, camOn, sharing, sharers, quality, lowBandwidth,
     startCall, startGroupCall, accept, decline, hangup, toggleMic, toggleCam, toggleShare, inviteToCall,
   }
 }

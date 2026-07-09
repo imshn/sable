@@ -313,8 +313,22 @@ function CallChat({ convo, names, onSend, onClose }) {
   )
 }
 
+function QualityPill({ quality }) {
+  if (!quality) return null
+  const label = { excellent: 'Excellent', good: 'Good', poor: 'Poor' }[quality.level]
+  return (
+    <span
+      className={`quality q-${quality.level}`}
+      title={`RTT ${quality.rttMs ?? '–'} ms · packet loss ${quality.lossPct}% · ${quality.kbps} kbps incoming`}
+    >
+      <span className="q-bars" aria-hidden="true"><i /><i /><i /></span>
+      {label}
+    </span>
+  )
+}
+
 function CallOverlay({
-  call, title, names, localStream, remoteStreams, micOn, camOn, sharing, sharers,
+  call, title, names, localStream, remoteStreams, micOn, camOn, sharing, sharers, quality, lowBandwidth,
   onToggleMic, onToggleCam, onToggleShare, onHangup, inviteCandidates, onInvite,
   convo, onSendChat, onReadChat,
 }) {
@@ -383,7 +397,13 @@ function CallOverlay({
             <span className="safety-icon">{Icon.lock}</span>
             {title}
             <span className="call-note">{sharing ? 'sharing your screen' : 'peer-to-peer, encrypted'}</span>
+            <QualityPill quality={quality} />
           </div>
+          {lowBandwidth && (
+            <div className="chat-toast bw-toast">
+              Poor connection — video paused, audio continues. Tap the camera to turn it back on.
+            </div>
+          )}
           {toast && !chatOpen && (
             <button className="chat-toast" onClick={() => { setChatOpen(true); setToast(null) }}>
               <strong>{toast.name}</strong> {toast.text}
@@ -561,9 +581,9 @@ function Shell({ name, onSignOut }) {
     notifyTyping, markRead, socketRef,
   } = useChat(name)
   const {
-    call, localStream, remoteStreams, micOn, camOn, sharing, sharers,
+    call, localStream, remoteStreams, micOn, camOn, sharing, sharers, quality, lowBandwidth,
     startCall, startGroupCall, accept, decline, hangup, toggleMic, toggleCam, toggleShare, inviteToCall,
-  } = useCall(socketRef, (target, log) => addLocalEntry(target, { t: 'call', ...log }))
+  } = useCall(socketRef, clientId, (target, log) => addLocalEntry(target, { t: 'call', ...log }))
   const [activeId, setActiveId] = useState(null)
   const [forwarding, setForwarding] = useState(null)
   const [groupModal, setGroupModal] = useState(false)
@@ -731,6 +751,8 @@ function Shell({ name, onSignOut }) {
           camOn={camOn}
           sharing={sharing}
           sharers={sharers}
+          quality={quality}
+          lowBandwidth={lowBandwidth}
           onToggleMic={toggleMic}
           onToggleCam={toggleCam}
           onToggleShare={toggleShare}
