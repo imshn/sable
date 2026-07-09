@@ -1,7 +1,6 @@
 // Sable relay server — routes ciphertext, public keys, and WebRTC signaling.
 // With Turso configured it also persists ciphertext history and offline
 // deliveries; the server still cannot read any message content.
-// The one exception to blindness: /preview fetches OG tags for link cards.
 import { Server } from 'socket.io'
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
@@ -9,12 +8,16 @@ import { migrate, store } from './db.js'
 
 const PORT = process.env.PORT || 3001
 
+// ------------------------------------------------------------------
+// Helpers
+// ------------------------------------------------------------------
+
 const metaTags = (html) => {
   const tags = {}
   for (const m of html.matchAll(/<meta\s[^>]*>/gi)) {
     const tag = m[0]
     const key = tag.match(/(?:property|name)=["']([^"']+)["']/i)?.[1]?.toLowerCase()
-    const content = tag.match(/content=["']([^"']*)["']/i)?.[1]
+    const content = tag.match(/content=["']([^"']*)["|']/i)?.[1]
     if (key && content && !tags[key]) tags[key] = content
   }
   return tags
@@ -23,10 +26,7 @@ const metaTags = (html) => {
 const decodeEntities = (s) =>
   s?.replace(/&(amp|lt|gt|quot|#39|#x27);/g, (m) => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#x27;': "'" })[m])
 
-// Cloudflare Realtime TURN: mint short-lived credentials server-side so the
-// long-lived API token never reaches a browser. Credentials live 2h; we cache
-// them for 1h so clients always receive at least an hour of validity.
-// https://developers.cloudflare.com/realtime/turn/generate-credentials/
+// TURN server credentials (Cloudflare Realtime)
 let turnCache = { at: 0, servers: [] }
 async function turnServers() {
   if (Date.now() - turnCache.at < 3600_000) return turnCache.servers
@@ -37,10 +37,7 @@ async function turnServers() {
         `https://rtc.live.cloudflare.com/v1/turn/keys/${process.env.CF_TURN_KEY_ID}/credentials/generate-ice-servers`,
         {
           method: 'POST',
-          headers: {
-            Authorization: `Bearer ${process.env.CF_TURN_API_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
+          headers: { Authorization: `Bearer ${process.env.CF_TURN_API_TOKEN}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ ttl: 7200 }),
           signal: AbortSignal.timeout(6000),
         }
@@ -49,31 +46,60 @@ async function turnServers() {
       if (r.ok && Array.isArray(body.iceServers)) servers = body.iceServers
       else console.error('cloudflare turn mint failed', r.status, JSON.stringify(body).slice(0, 200))
     }
-  } catch (e) {
-    console.error('turn fetch failed', e.message)
-  }
-  // don't sit on an empty answer — retry in a minute
+  } catch (e) { console.error('turn fetch failed', e.message) }
   turnCache = { at: servers.length ? Date.now() : Date.now() - 3540_000, servers }
   return servers
 }
 
-// a crashed relay takes every conversation down with it — never die on a bad request
-const BOOT_ID = randomUUID().slice(0, 8)
+// Parse a User-Agent string into a human-readable device hint
+function parseDeviceHint(ua = '') {
+  if (!ua) return 'Unknown device'
+  let os = 'Unknown OS'
+  let browser = 'Unknown browser'
+  if (/windows/i.test(ua)) os = 'Windows'
+  else if (/macintosh|mac os/i.test(ua)) os = 'macOS'
+  else if (/linux/i.test(ua)) os = 'Linux'
+  else if (/android/i.test(ua)) os = 'Android'
+  else if (/iphone|ipad/i.test(ua)) os = 'iOS'
+  if (/edg\//i.test(ua)) browser = 'Edge'
+  else if (/chrome/i.test(ua)) browser = 'Chrome'
+  else if (/firefox/i.test(ua)) browser = 'Firefox'
+  else if (/safari/i.test(ua)) browser = 'Safari'
+  return `${browser} on ${os}`
+}
+
+// Privacy enforcement helper
+// allowed: 'everyone' | 'contacts' | 'nobody'
+// relationship: whether the querier is an accepted contact
+function privacyAllows(setting, isContact) {
+  if (setting === 'everyone') return true
+  if (setting === 'contacts') return isContact
+  return false // 'nobody'
+}
+
+// ------------------------------------------------------------------
+// Bootstrap
+// ------------------------------------------------------------------
+
 process.on('uncaughtException', (e) => console.error('uncaughtException', e))
 process.on('unhandledRejection', (e) => console.error('unhandledRejection', e))
+const BOOT_ID = randomUUID().slice(0, 8)
 
 const httpServer = createServer(async (req, res) => {
   try {
     const u = new URL(req.url, 'http://relay')
     res.setHeader('Access-Control-Allow-Origin', '*')
+
     if (u.pathname === '/healthz') {
       res.writeHead(200)
       return res.end(JSON.stringify({ ok: true, boot: BOOT_ID, up: Math.round(process.uptime()) }))
     }
+
     if (u.pathname === '/turn') {
       res.setHeader('Content-Type', 'application/json')
       return res.end(JSON.stringify(await turnServers()))
     }
+
     if (u.pathname === '/api/search') {
       res.setHeader('Content-Type', 'application/json')
       const q = u.searchParams.get('q')
@@ -84,6 +110,7 @@ const httpServer = createServer(async (req, res) => {
       const results = await store.searchUsers(cleanQuery, uid)
       return res.end(JSON.stringify(results))
     }
+
     if (u.pathname !== '/preview') {
       res.writeHead(404)
       return res.end()
@@ -111,13 +138,19 @@ const httpServer = createServer(async (req, res) => {
 
 const io = new Server(httpServer, {
   cors: { origin: true },
-  maxHttpBufferSize: 40e6, // encrypted file payloads (15MB file ≈ 28MB b64+json)
+  maxHttpBufferSize: 40e6,
 })
 
-// presence + latest keys live in memory; Turso remembers everyone across restarts
-const online = new Map() // clientId -> { socketId, name, pubKey }
-const known = new Map() // clientId -> { name, pubKey, lastSeen } (persisted users)
-const groups = new Map() // groupId -> { name, owner, members: Set<clientId> }
+// ------------------------------------------------------------------
+// In-memory presence
+// ------------------------------------------------------------------
+
+const online = new Map()  // clientId -> { socketId, name, pubKey, sessionId }
+const known  = new Map()  // clientId -> { name, pubKey, lastSeen }
+const groups = new Map()  // groupId  -> { name, owner, members: Set<clientId> }
+
+// Privacy settings cache to avoid hitting DB on every message
+const privacyCache = new Map() // clientId -> privacy_settings row
 
 await migrate()
 for (const u of await store.allUsers()) {
@@ -128,27 +161,43 @@ for (const g of await store.loadGroups()) {
 }
 console.log(`restored ${known.size} users, ${groups.size} groups`)
 
+// ------------------------------------------------------------------
+// Presence notification (respects online_privacy)
+// ------------------------------------------------------------------
+
 const notifyPresence = async (userId, onlineState, lastSeen) => {
+  const userPrivacy = privacyCache.get(userId) || await store.getPrivacySettings(userId)
+  privacyCache.set(userId, userPrivacy)
+
   const contacts = await store.getContacts(userId)
   for (const c of contacts) {
     if (c.status !== 'accepted') continue
     const peerId = c.requester_id === userId ? c.recipient_id : c.requester_id
     const peerSocket = online.get(peerId)
-    if (peerSocket) {
-      io.to(peerSocket.socketId).emit('presence', { id: userId, online: onlineState, lastSeen })
-    }
+    if (!peerSocket) continue
+
+    // Respect online_privacy: if set to 'nobody', always appear offline to everyone
+    // If 'contacts', peerId is an accepted contact so allowed
+    const isContact = true // we're already inside accepted contacts loop
+    const showOnline = privacyAllows(userPrivacy?.online_privacy ?? 'everyone', isContact)
+    const showLastSeen = privacyAllows(userPrivacy?.last_seen_privacy ?? 'everyone', isContact)
+
+    io.to(peerSocket.socketId).emit('presence', {
+      id: userId,
+      online: showOnline ? onlineState : false,
+      lastSeen: showLastSeen ? lastSeen : null,
+    })
   }
 }
+
+// ------------------------------------------------------------------
+// Group helpers
+// ------------------------------------------------------------------
 
 const groupInfo = (id) => {
   const g = groups.get(id)
   const nameOf = (m) => online.get(m)?.name ?? known.get(m)?.name ?? 'unknown'
-  return {
-    id,
-    name: g.name,
-    owner: g.owner,
-    members: [...g.members].map((m) => ({ id: m, name: nameOf(m) })),
-  }
+  return { id, name: g.name, owner: g.owner, members: [...g.members].map((m) => ({ id: m, name: nameOf(m) })) }
 }
 
 const emitToMembers = (groupId, event, data, exceptId) => {
@@ -161,7 +210,16 @@ const emitToMembers = (groupId, event, data, exceptId) => {
   }
 }
 
+// ------------------------------------------------------------------
+// Socket connection
+// ------------------------------------------------------------------
+
 io.on('connection', (socket) => {
+  const ip = socket.handshake.headers['x-forwarded-for']?.split(',')[0]?.trim()
+             || socket.handshake.address
+  const ua = socket.handshake.headers['user-agent'] || ''
+  const deviceHint = parseDeviceHint(ua)
+
   const getContactsWithPresence = async (userId) => {
     const contacts = await store.getContacts(userId)
     return contacts.map(c => {
@@ -170,40 +228,59 @@ io.on('connection', (socket) => {
     })
   }
 
+  // Resolve relationship: returns contact row or null
+  const getContact = async (fromId, toId) => {
+    const contacts = await store.getContacts(fromId)
+    return contacts.find(c =>
+      (c.requester_id === fromId && c.recipient_id === toId) ||
+      (c.recipient_id === fromId && c.requester_id === toId)
+    ) || null
+  }
+
+  // ---- hello (auth + session creation) ----
   socket.on('hello', async ({ id, name, username, pubKey }) => {
     if (typeof id !== 'string' || !id || typeof name !== 'string' || !name.trim() || !pubKey) return
     const cleanName = name.trim().slice(0, 32)
     const cleanUsername = typeof username === 'string' ? username.trim().toLowerCase().slice(0, 32) : `user_${id.slice(0, 6)}`
-    
+
     const isAvailable = await store.checkUsernameAvailable(cleanUsername, id)
     if (!isAvailable) {
       socket.emit('auth-error', 'Username is already taken')
       return
     }
 
-    // one active session per identity: a fresh sign-in replaces the old tab
+    // One active session per identity
     const prev = online.get(id)
     if (prev && prev.socketId !== socket.id) {
       const old = io.sockets.sockets.get(prev.socketId)
       old?.emit('session-replaced')
       old?.disconnect(true)
+      // Revoke the old session
+      if (prev.sessionId) store.revokeSession(prev.sessionId, id)
     }
+
+    // Create a new session record
+    const sessionId = randomUUID()
     socket.data.clientId = id
-    online.set(id, { socketId: socket.id, name: cleanName, username: cleanUsername, pubKey })
+    socket.data.sessionId = sessionId
+    store.createSession(sessionId, id, socket.id, ip, ua, deviceHint)
+
+    online.set(id, { socketId: socket.id, name: cleanName, username: cleanUsername, pubKey, sessionId })
     known.set(id, { name: cleanName, username: cleanUsername, pubKey, lastSeen: Date.now() })
     store.upsertUser(id, cleanName, JSON.stringify(pubKey), cleanUsername)
-    
+
+    // Warm privacy cache
+    const privacy = await store.getPrivacySettings(id)
+    privacyCache.set(id, privacy)
+
     const contacts = await getContactsWithPresence(id)
     socket.emit('contacts', contacts)
-
-    // Notify accepted contacts that this user is online
     notifyPresence(id, true, Date.now())
 
     for (const [gid, g] of groups) {
       if (g.members.has(id)) socket.emit('group-added', groupInfo(gid))
     }
 
-    // ciphertext history + anything that arrived while offline
     const rows = await store.backlog(id)
     const undelivered = await store.undeliveredSenders(id)
     socket.emit('backlog', rows.map((r) => ({
@@ -220,29 +297,34 @@ io.on('connection', (socket) => {
       const sender = online.get(row.sender)
       if (sender) io.to(sender.socketId).emit('delivered', { from: id, msgId: row.id })
     }
-    
-    // Send own profile back to client
+
     const myProfile = await store.getUser(id)
-    if (myProfile) {
-      socket.emit('profile', myProfile)
-    }
+    if (myProfile) socket.emit('profile', myProfile)
+
+    // Send privacy settings + notification prefs
+    socket.emit('privacy-settings', privacy)
+    const notifPrefs = await store.getNotificationPrefs(id)
+    socket.emit('notification-prefs', notifPrefs)
   })
 
   const clientId = () => socket.data.clientId
   const myPub = () => JSON.stringify(online.get(clientId())?.pubKey ?? null)
 
-  // ----- user contacts -----
+  // ---- contacts ----
 
   socket.on('contact-request', async ({ to }) => {
     const from = clientId()
     if (!from || !to || from === to) return
-    const isSelf = from === to
-    if (isSelf) return
-    
+
     // Check if already blocked
     const existing = await store.getContacts(from)
     const rel = existing.find(c => c.requester_id === to || c.recipient_id === to)
     if (rel && rel.status === 'blocked') return
+
+    // Respect target's message_privacy: if 'nobody', can't be messaged/contacted
+    const targetPrivacy = privacyCache.get(to) || await store.getPrivacySettings(to)
+    const isContact = rel?.status === 'accepted'
+    if (!privacyAllows(targetPrivacy?.message_privacy ?? 'everyone', isContact)) return
 
     await store.upsertContact(from, to, 'pending')
     const target = online.get(to)
@@ -253,7 +335,6 @@ io.on('connection', (socket) => {
   socket.on('contact-accept', async ({ to }) => {
     const from = clientId()
     if (!from || !to) return
-    // "to" is the original requester, "from" is accepting
     await store.upsertContact(to, from, 'accepted')
     const target = online.get(to)
     if (target) io.to(target.socketId).emit('contact-updated', await getContactsWithPresence(to))
@@ -291,50 +372,40 @@ io.on('connection', (socket) => {
   socket.on('contact-unblock', async ({ to }) => {
     const from = clientId()
     if (!from || !to) return
-    await store.deleteContact(from, to) // return to neutral state
+    await store.deleteContact(from, to)
     const target = online.get(to)
     if (target) io.to(target.socketId).emit('contact-updated', await getContactsWithPresence(to))
     socket.emit('contact-updated', await getContactsWithPresence(from))
   })
 
+  // ---- profile ----
+
   socket.on('update-profile', async ({ name, username, bio, avatar }) => {
     const from = clientId()
     if (!from) return
-    
     if (username) {
       const cleanUsername = username.trim().toLowerCase().slice(0, 32)
       const isAvailable = await store.checkUsernameAvailable(cleanUsername, from)
-      if (!isAvailable) {
-        socket.emit('profile-error', 'Username is already taken')
-        return
-      }
+      if (!isAvailable) { socket.emit('profile-error', 'Username is already taken'); return }
       username = cleanUsername
     }
-
     const cleanName = name ? name.trim().slice(0, 32) : online.get(from)?.name
-    
-    await store.updateProfile(from, { 
-      name: cleanName, 
-      username, 
-      bio: bio ? bio.trim().slice(0, 160) : '', 
-      avatar 
-    })
-    
+    await store.updateProfile(from, { name: cleanName, username, bio: bio ? bio.trim().slice(0, 160) : '', avatar })
     if (online.has(from)) {
       online.get(from).name = cleanName
       if (username) online.get(from).username = username
     }
-    
     socket.emit('profile-updated', await store.getUser(from))
   })
 
-  // ----- invitations -----
+  // ---- invitations ----
+
   socket.on('create-invite', async (options) => {
     const from = clientId()
     if (!from) return
-    const code = crypto.randomUUID().split('-')[0] // short code
+    const code = randomUUID().split('-')[0]
     const expiresAt = options?.expiresIn ? Date.now() + options.expiresIn : null
-    store.createInvite(crypto.randomUUID(), code, from, expiresAt)
+    store.createInvite(randomUUID(), code, from, expiresAt)
     socket.emit('invite-created', { code, expiresAt })
   })
 
@@ -346,42 +417,175 @@ io.on('connection', (socket) => {
     callback({ invite })
   })
 
-  // ----- direct routing -----
+  // ---- privacy settings ----
+
+  socket.on('get-privacy-settings', async (callback) => {
+    const from = clientId()
+    if (!from) return
+    const settings = await store.getPrivacySettings(from)
+    privacyCache.set(from, settings)
+    if (typeof callback === 'function') callback(settings)
+    else socket.emit('privacy-settings', settings)
+  })
+
+  socket.on('save-privacy-settings', async (settings) => {
+    const from = clientId()
+    if (!from) return
+    const valid = ['everyone', 'contacts', 'nobody']
+    const cleaned = {
+      message_privacy:   valid.includes(settings.message_privacy)   ? settings.message_privacy   : 'everyone',
+      call_privacy:      valid.includes(settings.call_privacy)      ? settings.call_privacy      : 'everyone',
+      last_seen_privacy: valid.includes(settings.last_seen_privacy) ? settings.last_seen_privacy : 'everyone',
+      online_privacy:    valid.includes(settings.online_privacy)    ? settings.online_privacy    : 'everyone',
+      avatar_privacy:    valid.includes(settings.avatar_privacy)    ? settings.avatar_privacy    : 'everyone',
+      bio_privacy:       valid.includes(settings.bio_privacy)       ? settings.bio_privacy       : 'everyone',
+    }
+    await store.savePrivacySettings(from, cleaned)
+    privacyCache.set(from, { user_id: from, ...cleaned })
+    socket.emit('privacy-settings', { user_id: from, ...cleaned })
+  })
+
+  // ---- reporting ----
+
+  socket.on('report-user', async ({ reportedId, category, details }) => {
+    const from = clientId()
+    if (!from || !reportedId || from === reportedId) return
+    const validCategories = ['spam', 'harassment', 'fake_account', 'inappropriate_content', 'scam', 'other']
+    if (!validCategories.includes(category)) return
+    store.createReport(randomUUID(), from, reportedId, category, details?.slice(0, 500) || null)
+    socket.emit('report-sent', { ok: true })
+  })
+
+  // ---- notification preferences ----
+
+  socket.on('get-notification-prefs', async (callback) => {
+    const from = clientId()
+    if (!from) return
+    const prefs = await store.getNotificationPrefs(from)
+    if (typeof callback === 'function') callback(prefs)
+    else socket.emit('notification-prefs', prefs)
+  })
+
+  socket.on('save-notification-prefs', async (prefs) => {
+    const from = clientId()
+    if (!from) return
+    await store.saveNotificationPrefs(from, {
+      messages:         prefs.messages         !== false,
+      calls:            prefs.calls            !== false,
+      contact_requests: prefs.contact_requests !== false,
+      mentions:         prefs.mentions         !== false,
+    })
+    socket.emit('notification-prefs', await store.getNotificationPrefs(from))
+  })
+
+  // ---- sessions ----
+
+  socket.on('get-sessions', async (callback) => {
+    const from = clientId()
+    if (!from) return
+    const sessions = await store.getSessions(from)
+    const currentSessionId = socket.data.sessionId
+    const result = sessions.map(s => ({ ...s, isCurrent: s.id === currentSessionId }))
+    if (typeof callback === 'function') callback(result)
+    else socket.emit('sessions', result)
+  })
+
+  socket.on('revoke-session', async ({ sessionId }) => {
+    const from = clientId()
+    if (!from || !sessionId) return
+    // Can't revoke your own current session this way (use sign-out for that)
+    if (sessionId === socket.data.sessionId) return
+    await store.revokeSession(sessionId, from)
+    // Kick that socket if it's still connected
+    for (const [_, s] of io.sockets.sockets) {
+      if (s.data.sessionId === sessionId && s.data.clientId === from) {
+        s.emit('session-revoked')
+        s.disconnect(true)
+      }
+    }
+    socket.emit('sessions', (await store.getSessions(from)).map(s => ({ ...s, isCurrent: s.id === socket.data.sessionId })))
+  })
+
+  socket.on('revoke-all-sessions', async () => {
+    const from = clientId()
+    if (!from) return
+    await store.revokeAllSessionsExcept(from, socket.data.sessionId)
+    // Kick all other sockets for this user
+    for (const [_, s] of io.sockets.sockets) {
+      if (s.data.clientId === from && s.id !== socket.id) {
+        s.emit('session-revoked')
+        s.disconnect(true)
+      }
+    }
+    socket.emit('sessions', (await store.getSessions(from)).map(s => ({ ...s, isCurrent: s.id === socket.data.sessionId })))
+  })
+
+  // ---- account deletion ----
+
+  socket.on('delete-account', async () => {
+    const from = clientId()
+    if (!from) return
+    await store.deleteAccount(from)
+    // Clean up in-memory presence
+    online.delete(from)
+    known.delete(from)
+    privacyCache.delete(from)
+    // Notify contacts that user went offline
+    const contacts = await store.getContacts(from)
+    for (const c of contacts) {
+      const peerId = c.requester_id === from ? c.recipient_id : c.requester_id
+      const peerSocket = online.get(peerId)
+      if (peerSocket) io.to(peerSocket.socketId).emit('presence', { id: from, online: false, lastSeen: null })
+    }
+    socket.emit('account-deleted')
+    socket.disconnect(true)
+  })
+
+  // ---- message delivery (with privacy enforcement) ----
+
   const route = (event) => async (msg) => {
     const from = clientId()
     const target = from && msg && online.get(msg.to)
     if (!target) return
-    
-    // Check contact status before routing sensitive events
-    const contacts = await store.getContacts(from)
-    const contact = contacts.find(c => 
-      (c.requester_id === from && c.recipient_id === msg.to) || 
-      (c.recipient_id === from && c.requester_id === msg.to)
-    )
-    
-    if (!contact || contact.status !== 'accepted') return // Must be accepted contact
-    
+    const contact = await getContact(from, msg.to)
+    if (!contact || contact.status !== 'accepted') return
     io.to(target.socketId).emit(event, { ...msg, from, fromName: online.get(from)?.name })
   }
 
   socket.on('typing', route('typing'))
-  for (const ev of ['call-offer', 'call-answer', 'call-ice', 'call-end', 'call-decline', 'share-state', 'cam-state', 'mic-state']) {
+  for (const ev of ['call-answer', 'call-ice', 'call-end', 'call-decline', 'share-state', 'cam-state', 'mic-state']) {
     socket.on(ev, route(ev))
   }
 
-  // dm: { to, id, payload, selfPayload?, ts } — payload sealed for the
-  // recipient, selfPayload sealed for the sender (their own history copy)
+  // call-offer: enforce call_privacy
+  socket.on('call-offer', async (msg) => {
+    const from = clientId()
+    if (!from || !msg?.to) return
+    const target = online.get(msg.to)
+    if (!target) return
+    const contact = await getContact(from, msg.to)
+    if (!contact || contact.status !== 'accepted') return
+
+    // Respect the callee's call_privacy setting
+    const targetPrivacy = privacyCache.get(msg.to) || await store.getPrivacySettings(msg.to)
+    const isContact = contact?.status === 'accepted'
+    if (!privacyAllows(targetPrivacy?.call_privacy ?? 'everyone', isContact)) {
+      socket.emit('call-declined', { from: msg.to, reason: 'privacy' })
+      return
+    }
+    io.to(target.socketId).emit('call-offer', { ...msg, from, fromName: online.get(from)?.name })
+  })
+
+  // dm: enforce message_privacy + contact status
   socket.on('dm', async ({ to, id, payload, selfPayload, ts }) => {
     const from = clientId()
     if (!from || !to || !payload) return
-    
-    const contacts = await store.getContacts(from)
-    const contact = contacts.find(c => 
-      (c.requester_id === from && c.recipient_id === to) || 
-      (c.recipient_id === from && c.requester_id === to)
-    )
-    
-    if (!contact || contact.status !== 'accepted') return // Prevent DM if not accepted
+    const contact = await getContact(from, to)
+    if (!contact || contact.status !== 'accepted') return
+
+    // Respect recipient's message_privacy
+    const targetPrivacy = privacyCache.get(to) || await store.getPrivacySettings(to)
+    if (!privacyAllows(targetPrivacy?.message_privacy ?? 'everyone', contact.status === 'accepted')) return
 
     const recipient = online.get(to)
     const wasRouted = !!recipient
@@ -402,7 +606,8 @@ io.on('connection', (socket) => {
     if (target) io.to(target.socketId).emit('delivered', { from, msgId })
   })
 
-  // ----- groups -----
+  // ---- groups ----
+
   socket.on('group-create', ({ name, members }) => {
     const from = clientId()
     if (!from || typeof name !== 'string' || !name.trim() || !Array.isArray(members)) return
@@ -456,8 +661,6 @@ io.on('connection', (socket) => {
     }
   })
 
-  // gdm payloads: { [memberId]: { iv, ct } } — may include the sender's own
-  // history copy, which is stored but never routed
   socket.on('gdm', ({ groupId, id, payloads, ts }) => {
     const from = clientId()
     const g = groups.get(groupId)
@@ -480,7 +683,6 @@ io.on('connection', (socket) => {
     emitToMembers(groupId, 'gtyping', { groupId, from, name: online.get(from)?.name }, from)
   })
 
-  // group calls: ring + mesh membership announcements; offers/ice go via direct routes.
   for (const ev of ['gcall-ring', 'gcall-join', 'gcall-leave']) {
     socket.on(ev, ({ groupId, to }) => {
       const from = clientId()
@@ -497,13 +699,17 @@ io.on('connection', (socket) => {
     })
   }
 
+  // ---- disconnect ----
+
   socket.on('disconnect', () => {
     const id = clientId()
     if (id && online.get(id)?.socketId === socket.id) {
+      const sessionId = socket.data.sessionId
       online.delete(id)
       const k = known.get(id)
       if (k) k.lastSeen = Date.now()
       store.touchUser(id)
+      if (sessionId) store.touchSession(sessionId)
       notifyPresence(id, false, Date.now())
     }
   })

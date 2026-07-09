@@ -2213,3 +2213,235 @@ video.media { width: min(320px, 62vw); }
   font-size: 0.9rem;
 }
 
+/* ===== Phase 3: Privacy, Security & Notifications ===== */
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.settings-section-icon {
+  display: flex;
+  align-items: center;
+  color: var(--accent);
+}
+
+.settings-loading {
+  color: var(--muted);
+  font-size: 0.9rem;
+  padding: 16px 0;
+}
+
+.privacy-rows {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.privacy-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  flex-wrap: wrap;
+}
+
+.privacy-row:last-child { border-bottom: none; }
+
+.privacy-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 130px;
+}
+
+.privacy-row-title {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.privacy-row-desc {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.privacy-row-options {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.privacy-opt-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 14px;
+  border-radius: 100px;
+  border: 1.5px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.privacy-opt-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.privacy-opt-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.privacy-opt-check {
+  display: flex;
+  align-items: center;
+  transform: scale(0.7);
+}
+
+.notif-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.notif-row:last-child { border-bottom: none; }
+
+.notif-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+}
+
+.notif-row-title {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.notif-row-desc {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.toggle-switch {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  background: var(--border-strong);
+  border-radius: 100px;
+  border: none;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.toggle-switch.on { background: var(--accent); }
+
+.toggle-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.2s var(--spring);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
+.toggle-switch.on .toggle-thumb { transform: translateX(18px); }
+
+.session-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.session-card.current {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface-2));
+}
+
+.session-card-icon {
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.session-card.current .session-card-icon { color: var(--accent); }
+
+.session-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+}
+
+.session-device {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.session-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.session-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 3px 10px;
+  border-radius: 100px;
+  border: 1px solid var(--accent);
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+.danger-btn {
+  color: var(--danger) !important;
+  border-color: var(--danger) !important;
+}
+
+.danger-btn:hover {
+  background: var(--danger-soft) !important;
+}
+
+

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Icon } from './icons.jsx'
 import { b64encode } from './crypto.js'
 import { ConfirmModal } from './ConfirmModal.jsx'
+import { ReportModal } from './ReportModal.jsx'
 
 const timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
 const initials = (n) => n.trim().slice(0, 2).toUpperCase()
@@ -861,7 +862,7 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
 // target: { id, name, online, isGroup, members?, owner?, mine? }
 export function Thread({
   target, convo, clientId, onBack, onSend, onTyping, onStartCall, callBusy,
-  onReact, onDeleteMe, onDeleteAll, onForward, onLeaveGroup, onDeleteGroup, onAddMembers, onBlock, onUnblock,
+  onReact, onDeleteMe, onDeleteAll, onForward, onLeaveGroup, onDeleteGroup, onAddMembers, onBlock, onUnblock, socketRef,
 }) {
   const scrollRef = useRef(null)
   const [menu, setMenu] = useState(null)
@@ -871,6 +872,7 @@ export function Thread({
   const [pending, setPending] = useState([]) // files awaiting caption/edit before send
   const [replyTo, setReplyTo] = useState(null) // { id, name, preview }
   const [blockModal, setBlockModal] = useState(false)
+  const [reportModal, setReportModal] = useState(false)
   const swipe = useRef(null)
   const dragDepth = useRef(0)
   const messages = convo?.messages ?? []
@@ -1049,10 +1051,16 @@ export function Thread({
                     Unblock {target.name}
                   </button>
                 ) : (
-                  <button type="button" className="drawer-item danger" role="menuitem" onClick={() => { setHeadMenu(false); setBlockModal(true) }}>
-                    <span className="drawer-glyph danger-glyph">{Icon.block}</span>
-                    Block {target.name}
-                  </button>
+                  <>
+                    <button type="button" className="drawer-item danger" role="menuitem" onClick={() => { setHeadMenu(false); setBlockModal(true) }}>
+                      <span className="drawer-glyph danger-glyph">{Icon.block}</span>
+                      Block {target.name}
+                    </button>
+                    <button type="button" className="drawer-item danger" role="menuitem" onClick={() => { setHeadMenu(false); setReportModal(true) }}>
+                      <span className="drawer-glyph danger-glyph">{Icon.flag}</span>
+                      Report {target.name}
+                    </button>
+                  </>
                 )}
               </div>
             )}
@@ -1218,11 +1226,16 @@ export function Thread({
           message={`Are you sure you want to block ${target.name}?`}
           confirmText="Block"
           danger={true}
-          onConfirm={() => {
-            onBlock(target.id)
-            setBlockModal(false)
-          }}
+          onConfirm={() => { onBlock(target.id); setBlockModal(false) }}
           onCancel={() => setBlockModal(false)}
+        />
+      )}
+      {reportModal && (
+        <ReportModal
+          targetName={target.name}
+          targetId={target.id}
+          socket={socketRef?.current}
+          onClose={() => setReportModal(false)}
         />
       )}
     </section>

@@ -887,6 +887,7 @@ function Shell({ name, username, onSignOut }) {
             onAddMembers={() => setAddingTo(activeId)}
             onBlock={(id) => { blockContact(id); setActiveId(null) }}
             onUnblock={(id) => unblockContact(id)}
+            socketRef={socketRef}
           />
         ) : (
           <section className="thread placeholder">
