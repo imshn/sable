@@ -15,7 +15,7 @@ export function ConfirmModal({ title, message, onConfirm, onCancel, confirmText 
           
           <div className="modal-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '16px' }}>
             <button type="button" className="secondary" onClick={onCancel}>{cancelText}</button>
-            <button type="button" className={`primary ${danger ? 'danger' : ''}`} onClick={onConfirm} style={danger ? { backgroundColor: 'var(--red)', color: 'white', borderColor: 'transparent' } : {}}>
+            <button type="button" className={`primary ${danger ? 'danger' : ''}`} onClick={onConfirm} style={danger ? { backgroundColor: 'var(--danger)', color: 'white', borderColor: 'transparent' } : {}}>
               {confirmText}
             </button>
           </div>

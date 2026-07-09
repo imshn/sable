@@ -98,7 +98,7 @@ button {
   cursor: pointer;
 }
 
-input {
+input, textarea {
   font: inherit;
   color: var(--text);
   background: var(--surface-2);
@@ -108,12 +108,13 @@ input {
   width: 100%;
   min-height: 48px;
   transition: border-color 180ms ease, box-shadow 180ms ease, opacity 180ms ease;
+  resize: vertical;
 }
 
-input::placeholder { color: var(--muted); }
-input:disabled { opacity: 0.55; }
+input::placeholder, textarea::placeholder { color: var(--muted); }
+input:disabled, textarea:disabled { opacity: 0.55; }
 
-input:focus-visible {
+input:focus-visible, textarea:focus-visible {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
