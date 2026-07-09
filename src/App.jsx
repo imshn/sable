@@ -139,6 +139,9 @@ function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, safetyCod
           <span className={`status-dot ${connected ? 'on' : ''}`} aria-hidden="true" />
           {name}
           <ThemeToggle />
+          <button className="icon-btn subtle" aria-label="New Group" title="New Group" onClick={onNewGroup}>
+            {Icon.plus}
+          </button>
           <button className="icon-btn subtle" aria-label="Contacts" title="Contacts" onClick={() => onSelect('contacts')}>
             {Icon.users}
           </button>
