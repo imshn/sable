@@ -32,6 +32,7 @@ export function useCall(socketRef, myId, onLog) {
   const [camOn, setCamOn] = useState(true)
   const [sharing, setSharing] = useState(false)
   const [sharers, setSharers] = useState({}) // remote peerId -> true
+  const [camsOff, setCamsOff] = useState({}) // remote peerId -> true (their camera is off)
   const [quality, setQuality] = useState(null) // { level, rttMs, lossPct, kbps }
   const [lowBandwidth, setLowBandwidth] = useState(false)
   const restartAttempts = useRef(new Map()) // peerId -> count
@@ -108,8 +109,7 @@ export function useCall(socketRef, myId, onLog) {
         lowBwStreak.current++
         if (lowBwStreak.current >= 3) {
           debug('low bandwidth — dropping to audio only', worst)
-          localRef.current.getVideoTracks().forEach((t) => { t.enabled = false })
-          setCamOn(false)
+          setCamEnabled(false)
           setLowBandwidth(true)
         }
       } else {
@@ -135,6 +135,7 @@ export function useCall(socketRef, myId, onLog) {
     setCamOn(true)
     setSharing(false)
     setSharers({})
+    setCamsOff({})
     setQuality(null)
     setLowBandwidth(false)
     restartAttempts.current.clear()
@@ -204,6 +205,9 @@ export function useCall(socketRef, myId, onLog) {
       pc.getSenders().find((s) => s.track?.kind === 'video')?.replaceTrack(screenTrack)
       socketRef.current?.emit('share-state', { to: peerId, sharing: true })
     }
+    if (localRef.current && !localRef.current.getVideoTracks().some((t) => t.enabled)) {
+      socketRef.current?.emit('cam-state', { to: peerId, camOn: false })
+    }
     pc.onicecandidate = (e) =>
       e.candidate && socketRef.current?.emit('call-ice', { to: peerId, candidate: e.candidate })
     pc.ontrack = (e) => setRemoteStreams((s) => ({ ...s, [peerId]: e.streams[0] }))
@@ -229,6 +233,11 @@ export function useCall(socketRef, myId, onLog) {
       return next
     })
     setSharers((s) => {
+      const next = { ...s }
+      delete next[peerId]
+      return next
+    })
+    setCamsOff((s) => {
       const next = { ...s }
       delete next[peerId]
       return next
@@ -355,6 +364,15 @@ export function useCall(socketRef, myId, onLog) {
       if (isSharing && screenRef.current) stopShareRef.current?.()
     }
 
+    const onCamState = ({ from, camOn }) => {
+      setCamsOff((s) => {
+        const next = { ...s }
+        if (camOn) delete next[from]
+        else next[from] = true
+        return next
+      })
+    }
+
     socket.on('call-offer', onOffer)
     socket.on('call-answer', onAnswer)
     socket.on('call-ice', onIce)
@@ -364,6 +382,7 @@ export function useCall(socketRef, myId, onLog) {
     socket.on('gcall-join', onGroupJoin)
     socket.on('gcall-leave', onGroupLeave)
     socket.on('share-state', onShareState)
+    socket.on('cam-state', onCamState)
 
     return () => {
       socket.off('call-offer', onOffer)
@@ -375,6 +394,7 @@ export function useCall(socketRef, myId, onLog) {
       socket.off('gcall-join', onGroupJoin)
       socket.off('gcall-leave', onGroupLeave)
       socket.off('share-state', onShareState)
+      socket.off('cam-state', onCamState)
     }
   }, [socketRef, teardown]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -453,12 +473,19 @@ export function useCall(socketRef, myId, onLog) {
     setMicOn((v) => !v)
   }, [])
 
+  const setCamEnabled = (enabled) => {
+    localRef.current?.getVideoTracks().forEach((t) => { t.enabled = enabled })
+    setCamOn(enabled)
+    for (const peerId of pcs.current.keys()) {
+      socketRef.current?.emit('cam-state', { to: peerId, camOn: enabled })
+    }
+  }
+
   const toggleCam = useCallback(() => {
-    localRef.current?.getVideoTracks().forEach((t) => { t.enabled = !t.enabled })
-    setCamOn((v) => !v)
+    setCamEnabled(!(localRef.current?.getVideoTracks().some((t) => t.enabled)))
     setLowBandwidth(false) // turning the camera back on is an explicit override
     lowBwStreak.current = 0
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // swap the outgoing video track on every connection; browser picker offers
   // tab / window / entire screen natively
@@ -512,7 +539,7 @@ export function useCall(socketRef, myId, onLog) {
   }, [socketRef]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
-    call, localStream, remoteStreams, micOn, camOn, sharing, sharers, quality, lowBandwidth,
+    call, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, quality, lowBandwidth,
     startCall, startGroupCall, accept, decline, hangup, toggleMic, toggleCam, toggleShare, inviteToCall,
   }
 }

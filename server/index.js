@@ -226,7 +226,7 @@ io.on('connection', (socket) => {
   }
 
   socket.on('typing', route('typing'))
-  for (const ev of ['call-offer', 'call-answer', 'call-ice', 'call-end', 'call-decline', 'share-state']) {
+  for (const ev of ['call-offer', 'call-answer', 'call-ice', 'call-end', 'call-decline', 'share-state', 'cam-state']) {
     socket.on(ev, route(ev))
   }
 

@@ -223,9 +223,11 @@ function NewGroupModal({ contacts, onCreate, onClose }) {
 // Autoplay-safe video: browsers block unmuted autoplay once the user-gesture
 // window (~5s) lapses, which is how long ICE can take — the classic "call
 // connected but screen stays black". Fall back to muted playback + unmute pill.
-function Video({ stream, muted, className, allowUnmute, label }) {
+// When the video track goes dark (camera off), show the person instead of a void.
+function Video({ stream, muted, className, allowUnmute, label, personName, forceAvatar }) {
   const ref = useRef(null)
   const [blocked, setBlocked] = useState(false)
+  const [videoDark, setVideoDark] = useState(false)
 
   useEffect(() => {
     const el = ref.current
@@ -241,10 +243,35 @@ function Video({ stream, muted, className, allowUnmute, label }) {
     })
   }, [stream, muted])
 
+  // remote camera-off: the sender disabling their track stops RTP, which
+  // surfaces here as the track's mute event
+  useEffect(() => {
+    const track = stream?.getVideoTracks()[0]
+    if (!track) {
+      setVideoDark(true)
+      return
+    }
+    const update = () => setVideoDark(track.muted)
+    update()
+    track.addEventListener('mute', update)
+    track.addEventListener('unmute', update)
+    return () => {
+      track.removeEventListener('mute', update)
+      track.removeEventListener('unmute', update)
+    }
+  }, [stream])
+
+  const showAvatar = forceAvatar || videoDark
   return (
     <div className={`video-wrap ${className ?? ''}`}>
       <video ref={ref} autoPlay playsInline muted={muted} />
-      {label && <span className="video-label">{label}</span>}
+      {showAvatar && personName && (
+        <div className="video-avatar">
+          <span className="avatar big-tile">{initials(personName)}</span>
+          <span className="video-avatar-name">{personName}</span>
+        </div>
+      )}
+      {label && !showAvatar && <span className="video-label">{label}</span>}
       {blocked && allowUnmute && (
         <button
           className="unmute-pill"
@@ -328,7 +355,7 @@ function QualityPill({ quality }) {
 }
 
 function CallOverlay({
-  call, title, names, localStream, remoteStreams, micOn, camOn, sharing, sharers, quality, lowBandwidth,
+  call, title, names, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, quality, lowBandwidth,
   onToggleMic, onToggleCam, onToggleShare, onHangup, inviteCandidates, onInvite,
   convo, onSendChat, onReadChat,
 }) {
@@ -372,12 +399,13 @@ function CallOverlay({
                 className="stage-video"
                 allowUnmute={!sharing}
                 label={sharing ? 'You are presenting' : `${names(remoteSharer)} is presenting`}
+                personName={sharing ? 'You' : names(remoteSharer)}
               />
               <div className="filmstrip">
                 {stripRemotes.map(([peerId, stream]) => (
-                  <Video key={peerId} stream={stream} className="strip-tile" label={names(peerId)} />
+                  <Video key={peerId} stream={stream} className="strip-tile" label={names(peerId)} personName={names(peerId)} forceAvatar={!!camsOff[peerId]} />
                 ))}
-                {!sharing && <Video stream={localStream} muted className={`strip-tile ${camOn ? '' : 'dim'}`} label="you" />}
+                {!sharing && <Video stream={localStream} muted className="strip-tile" label="you" personName="You" forceAvatar={!camOn} />}
               </div>
             </>
           ) : remotes.length === 0 ? (
@@ -388,11 +416,11 @@ function CallOverlay({
           ) : (
             <div className={`remote-grid n${Math.min(remotes.length, 4)}`}>
               {remotes.map(([peerId, stream]) => (
-                <Video key={peerId} stream={stream} className="remote-video" allowUnmute label={names(peerId)} />
+                <Video key={peerId} stream={stream} className="remote-video" allowUnmute label={names(peerId)} personName={names(peerId)} forceAvatar={!!camsOff[peerId]} />
               ))}
             </div>
           )}
-          {!presenting && <Video stream={localStream} muted className={`local-video ${camOn ? '' : 'off'}`} />}
+          {!presenting && <Video stream={localStream} muted className="local-video" personName="You" forceAvatar={!camOn} />}
           <div className="call-topbar">
             <span className="safety-icon">{Icon.lock}</span>
             {title}
@@ -581,7 +609,7 @@ function Shell({ name, onSignOut }) {
     notifyTyping, markRead, socketRef,
   } = useChat(name)
   const {
-    call, localStream, remoteStreams, micOn, camOn, sharing, sharers, quality, lowBandwidth,
+    call, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, quality, lowBandwidth,
     startCall, startGroupCall, accept, decline, hangup, toggleMic, toggleCam, toggleShare, inviteToCall,
   } = useCall(socketRef, clientId, (target, log) => addLocalEntry(target, { t: 'call', ...log }))
   const [activeId, setActiveId] = useState(null)
@@ -751,6 +779,7 @@ function Shell({ name, onSignOut }) {
           camOn={camOn}
           sharing={sharing}
           sharers={sharers}
+          camsOff={camsOff}
           quality={quality}
           lowBandwidth={lowBandwidth}
           onToggleMic={toggleMic}
