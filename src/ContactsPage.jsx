@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react'
 import { Icon } from './icons.jsx'
+import { ConfirmModal } from './ConfirmModal.jsx'
 
 export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoCall, sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, blockContact, unblockContact, socketRef }) {
   const [activeTab, setActiveTab] = useState('contacts') // contacts, requests, search
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [isSearching, setIsSearching] = useState(false)
+  const [userToBlock, setUserToBlock] = useState(null)
 
   const pendingRequests = contacts.filter(c => c.status === 'pending' && !c.isRequester)
   const sentRequests = contacts.filter(c => c.status === 'pending' && c.isRequester)
@@ -59,7 +61,7 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
               <button className="icon-btn" onClick={() => onVoiceCall(c.id)} title="Voice Call">{Icon.call}</button>
               <button className="icon-btn" onClick={() => onVideoCall(c.id)} title="Video Call">{Icon.video}</button>
               <button className="icon-btn danger" onClick={() => removeContact(c.id)} title="Remove Contact">{Icon.trash}</button>
-              <button className="icon-btn danger" onClick={() => { if(window.confirm(`Block ${c.name}?`)) blockContact(c.id) }} title="Block User">{Icon.lock}</button>
+              <button className="icon-btn danger" onClick={() => setUserToBlock(c)} title="Block User">{Icon.lock}</button>
             </div>
           </li>
         ))}
@@ -209,6 +211,20 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
         {activeTab === 'search' && renderSearch()}
         {activeTab === 'blocked' && renderBlocked()}
       </div>
+
+      {userToBlock && (
+        <ConfirmModal
+          title="Block User"
+          message={`Are you sure you want to block ${userToBlock.name}?`}
+          confirmText="Block"
+          danger={true}
+          onConfirm={() => {
+            blockContact(userToBlock.id)
+            setUserToBlock(null)
+          }}
+          onCancel={() => setUserToBlock(null)}
+        />
+      )}
     </div>
   )
 }

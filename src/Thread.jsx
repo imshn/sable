@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from './icons.jsx'
 import { b64encode } from './crypto.js'
+import { ConfirmModal } from './ConfirmModal.jsx'
 
 const timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
 const initials = (n) => n.trim().slice(0, 2).toUpperCase()
@@ -869,6 +870,7 @@ export function Thread({
   const [dragOver, setDragOver] = useState(false)
   const [pending, setPending] = useState([]) // files awaiting caption/edit before send
   const [replyTo, setReplyTo] = useState(null) // { id, name, preview }
+  const [blockModal, setBlockModal] = useState(false)
   const swipe = useRef(null)
   const dragDepth = useRef(0)
   const messages = convo?.messages ?? []
@@ -1042,7 +1044,7 @@ export function Thread({
                     )}
                   </>
                 ) : (
-                  <button type="button" className="drawer-item danger" role="menuitem" onClick={() => { setHeadMenu(false); if(window.confirm(`Block ${target.name}?`)) onBlock(target.id) }}>
+                  <button type="button" className="drawer-item danger" role="menuitem" onClick={() => { setHeadMenu(false); setBlockModal(true) }}>
                     <span className="drawer-glyph danger-glyph">{Icon.lock}</span>
                     Block {target.name}
                   </button>
@@ -1196,6 +1198,19 @@ export function Thread({
           index={lightbox}
           onClose={() => setLightbox(null)}
           onNav={(delta) => setLightbox((i) => Math.max(0, Math.min(mediaList.length - 1, i + delta)))}
+        />
+      )}
+      {blockModal && (
+        <ConfirmModal
+          title="Block User"
+          message={`Are you sure you want to block ${target.name}?`}
+          confirmText="Block"
+          danger={true}
+          onConfirm={() => {
+            onBlock(target.id)
+            setBlockModal(false)
+          }}
+          onCancel={() => setBlockModal(false)}
         />
       )}
     </section>

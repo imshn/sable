@@ -5,6 +5,7 @@ import { Icon } from './icons.jsx'
 import { Thread, callLogText, Linkified } from './Thread.jsx'
 import { ContactsPage } from './ContactsPage.jsx'
 import { ProfileSettingsModal } from './ProfileSettingsModal.jsx'
+import { ConfirmModal } from './ConfirmModal.jsx'
 import { InvitePage } from './InvitePage.jsx'
 
 function useTheme() {
@@ -680,11 +681,8 @@ function Shell({ name, username, onSignOut }) {
   } = chat
 
   useEffect(() => {
-    if (authError) {
-      alert(authError)
-      onSignOut()
-    }
-  }, [authError, onSignOut])
+    // We now render a ConfirmModal for authError below instead of alert
+  }, [authError])
   const {
     call, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, micsOff, quality, lowBandwidth,
     startCall, startGroupCall, accept, decline, hangup, toggleMic, toggleCam, toggleShare, inviteToCall,
@@ -899,6 +897,17 @@ function Shell({ name, username, onSignOut }) {
             setActiveId(call.groupId ?? call.peerId)
           }}
           onDecline={decline}
+        />
+      )}
+
+      {authError && (
+        <ConfirmModal
+          title="Authentication Error"
+          message={authError}
+          confirmText="OK"
+          danger={true}
+          onConfirm={() => onSignOut()}
+          onCancel={() => onSignOut()}
         />
       )}
     </div>
