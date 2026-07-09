@@ -64,8 +64,21 @@ connections and don't share the in-memory presence/group registry.
 Calls use free openrelay TURN servers so WebRTC connects across
 carrier-grade NAT (Jio/Airtel mobile networks).
 
-Free-tier caveat: the Render relay sleeps after ~15 idle minutes; the
-first visitor after a quiet spell waits ~30–60s while it wakes.
+Keepalive: a GitHub Action pings the relay every 10 minutes
+([.github/workflows/keepalive.yml](.github/workflows/keepalive.yml)) so the
+free instance rarely sleeps; a daily Vercel cron (`/api/ping`) backs it up
+(Hobby crons are limited to once per day).
+
+## Persistence (Turso)
+
+With `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN` set on the relay, Sable stores
+users (name + public key), group rosters, and messages — as ciphertext only,
+one sealed copy per recipient. This enables chat history across restarts,
+offline delivery (single tick until the recipient comes back), and contacts
+that persist as online/offline. Identity keys live in the browser's IndexedDB
+(non-extractable), so history stays decryptable across restarts. Without the
+env vars the relay runs memory-only. Clearing site data rotates your keys and
+orphans old history — by design, there is no key escrow.
 
 ### Testing on two devices
 
