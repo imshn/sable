@@ -39,6 +39,7 @@ export const Icon = {
   userPlus: svg(<><circle cx="10" cy="8" r="3.2" /><path d="M4.5 19c.6-3 2.8-4.8 5.5-4.8s4.9 1.8 5.5 4.8" /><path d="M18 7v6" /><path d="M15 10h6" /></>),
   sun: svg(<><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2.5" /><path d="M12 19v2.5" /><path d="M2.5 12H5" /><path d="M19 12h2.5" /><path d="m5 5 1.8 1.8" /><path d="m17.2 17.2 1.8 1.8" /><path d="m19 5-1.8 1.8" /><path d="m6.8 17.2-1.8 1.8" /></>),
   rotate: svg(<><path d="M20 11a8 8 0 1 0-2.3 6.3" /><path d="M20 5v6h-6" /></>),
+  reply: svg(<><path d="m9 6-5.5 5L9 16" /><path d="M3.5 11H14a6 6 0 0 1 6 6v2" /></>),
   pen: svg(<><path d="m4 20 1-4.5L16.5 4a2.1 2.1 0 0 1 3 0l.5.5a2.1 2.1 0 0 1 0 3L8.5 19Z" /><path d="m14.5 6 3.5 3.5" /></>),
   crop: svg(<><path d="M7 2.5v14.5h14.5" /><path d="M2.5 7H17v14.5" /></>),
   moon: svg(<path d="M20 13.5A8 8 0 0 1 10.5 4 8 8 0 1 0 20 13.5Z" />),

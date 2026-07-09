@@ -27,6 +27,22 @@ export const callLogText = (body, peerName) =>
     'media-error': 'Could not access camera or microphone',
   })[body.kind] ?? 'Video call'
 
+// short description of a message for reply quotes / the reply bar
+export const replyPreviewOf = (m) => {
+  if (m.deleted) return 'Message deleted'
+  const b = m.body
+  if (b.t === 'loc') return 'Location'
+  if (b.t === 'file') {
+    if (b.caption) return b.caption.slice(0, 120)
+    if (b.voice) return 'Voice message'
+    if (b.mime?.startsWith('image/')) return 'Photo'
+    if (b.mime?.startsWith('video/')) return 'Video'
+    if (b.mime?.startsWith('audio/')) return 'Audio'
+    return b.name
+  }
+  return (b.text ?? '').slice(0, 120)
+}
+
 const isMedia = (m) =>
   !m.deleted && m.body?.t === 'file' && (m.body.mime?.startsWith('image/') || m.body.mime?.startsWith('video/'))
 
@@ -448,7 +464,7 @@ function MessageBody({ body, onOpenMedia }) {
   )
 }
 
-function ContextMenu({ menu, onClose, onReact, onCopy, onForward, onDeleteMe, onDeleteAll }) {
+function ContextMenu({ menu, onClose, onReact, onReply, onCopy, onForward, onDeleteMe, onDeleteAll }) {
   const ref = useRef(null)
 
   useEffect(() => {
@@ -484,6 +500,9 @@ function ContextMenu({ menu, onClose, onReact, onCopy, onForward, onDeleteMe, on
           </button>
         ))}
       </div>
+      <button className="ctx-item" role="menuitem" onClick={() => { onReply(); onClose() }}>
+        {Icon.reply} Reply
+      </button>
       {msg.body.t === 'text' && (
         <button className="ctx-item" role="menuitem" onClick={() => { onCopy(); onClose() }}>
           {Icon.copy} Copy
@@ -849,6 +868,8 @@ export function Thread({
   const [lightbox, setLightbox] = useState(null)
   const [dragOver, setDragOver] = useState(false)
   const [pending, setPending] = useState([]) // files awaiting caption/edit before send
+  const [replyTo, setReplyTo] = useState(null) // { id, name, preview }
+  const swipe = useRef(null)
   const dragDepth = useRef(0)
   const messages = convo?.messages ?? []
   const mediaList = messages.filter(isMedia)
@@ -878,6 +899,59 @@ export function Thread({
     if (m.deleted || m.kind === 'call' || m.kind === 'sys' || m.kind === 'error') return
     e.preventDefault()
     setMenu({ msg: m, x: e.clientX, y: e.clientY })
+  }
+
+  const startReply = (m) => {
+    if (m.deleted || m.kind === 'call' || m.kind === 'sys' || m.kind === 'error') return
+    setReplyTo({
+      id: m.id,
+      name: m.kind === 'self' ? 'You' : (m.name ?? target.name),
+      preview: replyPreviewOf(m),
+    })
+  }
+
+  // every outgoing envelope carries the pending reply reference
+  const sendWithReply = (env) => {
+    onSend(replyTo ? { ...env, reply: replyTo } : env)
+    setReplyTo(null)
+  }
+
+  const jumpTo = (msgId) => {
+    const el = scrollRef.current?.querySelector(`[data-msg-id="${msgId}"]`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.add('flash')
+    setTimeout(() => el.classList.remove('flash'), 1600)
+  }
+
+  // WhatsApp swipe-right-to-reply (touch)
+  const onTouchStart = (e, m) => {
+    const t = e.touches[0]
+    swipe.current = { x: t.clientX, y: t.clientY, dx: 0, el: e.currentTarget, m, live: true }
+  }
+  const onTouchMove = (e) => {
+    const s = swipe.current
+    if (!s?.live) return
+    const t = e.touches[0]
+    const dx = t.clientX - s.x
+    if (Math.abs(t.clientY - s.y) > 42) {
+      s.live = false
+      s.el.style.transform = ''
+      return
+    }
+    if (dx > 0) {
+      s.dx = dx
+      s.el.style.transition = 'none'
+      s.el.style.transform = `translateX(${Math.min(dx, 72)}px)`
+    }
+  }
+  const onTouchEnd = () => {
+    const s = swipe.current
+    if (!s) return
+    s.el.style.transition = ''
+    s.el.style.transform = ''
+    if (s.live && s.dx > 52) startReply(s.m)
+    swipe.current = null
   }
 
   const subtitle = target.isGroup
@@ -996,10 +1070,20 @@ export function Thread({
           return (
             <div
               key={m.id}
+              data-msg-id={m.id}
               className={`msg ${m.kind === 'self' ? 'self' : 'peer'} ${grouped ? 'grouped' : ''} ${reactions.length ? 'reacted' : ''}`}
               onContextMenu={(e) => openMenu(e, m)}
+              onTouchStart={(e) => onTouchStart(e, m)}
+              onTouchMove={onTouchMove}
+              onTouchEnd={onTouchEnd}
             >
               <div className={`bubble ${rich ? 'rich' : ''}`}>
+                {m.body.reply && !m.deleted && (
+                  <button type="button" className="quote" onClick={() => jumpTo(m.body.reply.id)}>
+                    <span className="quote-name">{m.body.reply.name}</span>
+                    <span className="quote-text">{m.body.reply.preview}</span>
+                  </button>
+                )}
                 {target.isGroup && m.kind === 'peer' && !grouped && (
                   <span className="sender-name">{m.name}</span>
                 )}
@@ -1046,7 +1130,19 @@ export function Thread({
         )}
       </main>
 
-      <Composer target={target} onSend={onSend} onTyping={onTyping} onPickFiles={queueFiles} />
+      {replyTo && (
+        <div className="reply-bar">
+          <span className="reply-glyph">{Icon.reply}</span>
+          <span className="reply-bar-body">
+            <span className="quote-name">{replyTo.name}</span>
+            <span className="quote-text">{replyTo.preview}</span>
+          </span>
+          <button className="icon-btn subtle" aria-label="Cancel reply" onClick={() => setReplyTo(null)}>
+            {Icon.x}
+          </button>
+        </div>
+      )}
+      <Composer target={target} onSend={sendWithReply} onTyping={onTyping} onPickFiles={queueFiles} />
 
       {pending.length > 0 && (
         <SendPreview
@@ -1055,7 +1151,7 @@ export function Thread({
           remaining={pending.length - 1}
           onCancel={() => setPending((q) => q.slice(1))}
           onSend={async (file, caption) => {
-            onSend(await fileEnvelope(file, caption))
+            sendWithReply(await fileEnvelope(file, caption))
             setPending((q) => q.slice(1))
           }}
         />
@@ -1066,6 +1162,7 @@ export function Thread({
           menu={menu}
           onClose={() => setMenu(null)}
           onReact={(emoji) => onReact(menu.msg.id, emoji)}
+          onReply={() => startReply(menu.msg)}
           onCopy={() => navigator.clipboard?.writeText(menu.msg.body.text ?? '')}
           onForward={() => onForward(menu.msg)}
           onDeleteMe={() => onDeleteMe(menu.msg.id)}
