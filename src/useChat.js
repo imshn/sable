@@ -40,7 +40,6 @@ export function useChat(name, username) {
   const [sessionReplaced, setSessionReplaced] = useState(false)
   const [authError, setAuthError] = useState(null)
   const [myProfile, setMyProfile] = useState(null)
-  const [myProfile, setMyProfile] = useState(null)
   
   const socketRef = useRef(null)
   const keyCache = useRef(new Map()) // JSON(jwk) -> Promise<CryptoKey>
