@@ -4,6 +4,7 @@ import { useCall } from './useCall.js'
 import { Icon } from './icons.jsx'
 import { Thread, callLogText, Linkified } from './Thread.jsx'
 import { ContactsPage } from './ContactsPage.jsx'
+import { ProfileSettingsModal } from './ProfileSettingsModal.jsx'
 import { InvitePage } from './InvitePage.jsx'
 
 function useTheme() {
@@ -127,7 +128,7 @@ const previewText = (last, targetName) => {
   return body.text
 }
 
-function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, safetyCode, connected, onSignOut }) {
+function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, onShowProfile, safetyCode, connected, onSignOut }) {
   return (
     <aside className="sidebar">
       <header className="sidebar-header">
@@ -139,6 +140,9 @@ function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, safetyCod
           <span className={`status-dot ${connected ? 'on' : ''}`} aria-hidden="true" />
           {name}
           <ThemeToggle />
+          <button className="icon-btn subtle" aria-label="Profile Settings" title="Profile Settings" onClick={onShowProfile}>
+            {Icon.settings}
+          </button>
           <button className="icon-btn subtle" aria-label="New Group" title="New Group" onClick={onNewGroup}>
             {Icon.plus}
           </button>
@@ -658,6 +662,7 @@ function ForwardPicker({ rows, excludeId, onPick, onClose }) {
 function Shell({ name, username, onSignOut }) {
   const [activeId, setActiveId] = useState('contacts')
   const [creatingGroup, setCreatingGroup] = useState(false)
+  const [showProfile, setShowProfile] = useState(false)
   const [addingTo, setAddingTo] = useState(null)
   const [forwarding, setForwarding] = useState(null)
   const [inviteCode, setInviteCode] = useState(() => {
@@ -667,10 +672,10 @@ function Shell({ name, username, onSignOut }) {
   })
   const chat = useChat(name, username)
   const {
-    clientId, contacts, groups, convos, connected, safetyCode, sessionReplaced, authError,
+    clientId, contacts, groups, convos, connected, safetyCode, sessionReplaced, authError, myProfile,
     send, react, deleteForAll, deleteForMe, addLocalEntry,
     createGroup, deleteGroup, leaveGroup, inviteToGroup,
-    sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact,
+    sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, blockContact, unblockContact,
     notifyTyping, markRead, socketRef
   } = chat
 
@@ -746,6 +751,7 @@ function Shell({ name, username, onSignOut }) {
         safetyCode={safetyCode}
         connected={connected}
         onSignOut={onSignOut}
+        onShowProfile={() => setShowProfile(true)}
       />
       <main className="call-stage with-chat">
         {inviteCode ? (
@@ -804,6 +810,8 @@ function Shell({ name, username, onSignOut }) {
             acceptContactRequest={acceptContactRequest}
             rejectContactRequest={rejectContactRequest}
             removeContact={removeContact}
+            blockContact={blockContact}
+            unblockContact={unblockContact}
             socketRef={socketRef}
           />
         ) : activeId ? (
@@ -824,6 +832,7 @@ function Shell({ name, username, onSignOut }) {
             onLeaveGroup={() => { leaveGroup(activeId); setActiveId(null) }}
             onDeleteGroup={() => { deleteGroup(activeId); setActiveId(null) }}
             onAddMembers={() => setAddingTo(activeId)}
+            onBlock={(id) => { blockContact(id); setActiveId(null) }}
           />
         ) : (
           <section className="thread placeholder">
@@ -857,6 +866,29 @@ function Shell({ name, username, onSignOut }) {
           onClose={() => setForwarding(null)}
         />
       )}
+
+      {showProfile && (
+        <ProfileSettingsModal
+          user={myProfile || { name, username }}
+          socket={socketRef.current}
+          onUpdateProfile={(profile) => {
+            socketRef.current?.emit('update-profile', profile)
+          }}
+          onClose={(updatedProfile) => {
+            setShowProfile(false)
+            if (updatedProfile?.name && updatedProfile.name !== name) {
+              localStorage.setItem('sable-name', updatedProfile.name)
+              if (updatedProfile.username) {
+                localStorage.setItem('sable-username', updatedProfile.username)
+              }
+              // It will update in Shell but wait, App needs to know the name changed.
+              // We could force a reload, or let App state trickle down.
+              // For now, App relies on localStorage mostly.
+            }
+          }}
+        />
+      )}
+
       {call.status === 'incoming' && (
         <IncomingCall
           title={call.groupId ? groups.find((g) => g.id === call.groupId)?.name ?? 'Group call' : contacts.find((c) => c.id === call.peerId)?.name ?? 'Unknown'}

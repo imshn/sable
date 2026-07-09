@@ -39,7 +39,9 @@ export function useChat(name, username) {
   const [connected, setConnected] = useState(false)
   const [sessionReplaced, setSessionReplaced] = useState(false)
   const [authError, setAuthError] = useState(null)
-
+  const [myProfile, setMyProfile] = useState(null)
+  const [myProfile, setMyProfile] = useState(null)
+  
   const socketRef = useRef(null)
   const keyCache = useRef(new Map()) // JSON(jwk) -> Promise<CryptoKey>
   const peerKeyRef = useRef(new Map()) // peerId -> Promise<CryptoKey> (their latest key)
@@ -259,6 +261,12 @@ export function useChat(name, username) {
         addEntry(id, { id: crypto.randomUUID(), kind: 'sys', body: { text: `${names} joined the group` }, ts: Date.now() }, false)
       })
 
+      // ----- profile -----
+      socket.on('profile', (profile) => {
+        if (!alive) return
+        setMyProfile(profile)
+      })
+
       const onMessage = async ({ key, from, fromName, msgId, payload, ts, group }) => {
         const keyPromise = peerKeyRef.current.get(from)
         if (!keyPromise) return
@@ -411,11 +419,19 @@ export function useChat(name, username) {
     socketRef.current?.emit('contact-remove', { to })
   }, [])
 
+  const blockContact = useCallback((to) => {
+    socketRef.current?.emit('contact-block', { to })
+  }, [])
+
+  const unblockContact = useCallback((to) => {
+    socketRef.current?.emit('contact-unblock', { to })
+  }, [])
+
   return {
-    clientId, contacts, groups, convos, safetyCode, connected, sessionReplaced, authError,
+    clientId, contacts, groups, convos, safetyCode, connected, sessionReplaced, authError, myProfile,
     send, react, deleteForAll, deleteForMe, addLocalEntry,
     createGroup, deleteGroup, leaveGroup, inviteToGroup,
-    sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact,
+    sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, blockContact, unblockContact,
     notifyTyping, markRead, socketRef,
   }
 }

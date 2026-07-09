@@ -2181,3 +2181,34 @@ video.media { width: min(320px, 62vw); }
   font-size: 1rem;
   text-align: center;
 }
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-group label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.avatar-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.avatar-preview-row input {
+  flex: 1;
+}
+
+.error-banner {
+  background: rgba(255, 60, 60, 0.1);
+  color: #ff5555;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+

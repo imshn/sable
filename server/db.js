@@ -111,6 +111,26 @@ export const store = {
     return r.rows[0].id === currentUserId
   },
 
+  updateProfile: async (id, { name, username, bio, avatar }) => {
+    if (!db) return false
+    try {
+      const r = await db.execute({
+        sql: `UPDATE users SET name=?, username=?, bio=?, avatar=?, updated_at=? WHERE id=?`,
+        args: [name, username, bio, avatar, Date.now(), id]
+      })
+      return r.rowsAffected > 0
+    } catch (e) {
+      console.error('db update profile error:', e.message)
+      return false
+    }
+  },
+
+  getUser: async (id) => {
+    if (!db) return null
+    const r = await db.execute({ sql: `SELECT id, name, username, bio, avatar, pubkey, created_at, updated_at, last_seen FROM users WHERE id=?`, args: [id] })
+    return r.rows[0] || null
+  },
+
   touchUser: (id) =>
     db && safe(db.execute({ sql: `UPDATE users SET last_seen=? WHERE id=?`, args: [Date.now(), id] })),
 
@@ -120,12 +140,20 @@ export const store = {
     return r.rows
   },
 
-  searchUsers: async (query, limit = 50) => {
+  searchUsers: async (query, currentUserId, limit = 50) => {
     if (!db || !query) return []
     const like = `%${query}%`
     const r = await db.execute({
-      sql: `SELECT id, name, username, avatar FROM users WHERE username LIKE ? OR name LIKE ? LIMIT ?`,
-      args: [like, like, limit]
+      sql: `SELECT id, name, username, avatar FROM users 
+            WHERE (username LIKE ? OR name LIKE ?)
+            AND id != ?
+            AND id NOT IN (
+              SELECT recipient_id FROM contacts WHERE requester_id = ? AND status = 'blocked'
+              UNION
+              SELECT requester_id FROM contacts WHERE recipient_id = ? AND status = 'blocked'
+            )
+            LIMIT ?`,
+      args: [like, like, currentUserId, currentUserId, currentUserId, limit]
     })
     return r.rows
   },

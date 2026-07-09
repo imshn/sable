@@ -77,10 +77,11 @@ const httpServer = createServer(async (req, res) => {
     if (u.pathname === '/api/search') {
       res.setHeader('Content-Type', 'application/json')
       const q = u.searchParams.get('q')
+      const uid = u.searchParams.get('uid')
       if (typeof q !== 'string' || q.trim().length < 2) return res.end('[]')
       const cleanQuery = q.trim().replace(/^@/, '')
       if (cleanQuery.length < 2) return res.end('[]')
-      const results = await store.searchUsers(cleanQuery)
+      const results = await store.searchUsers(cleanQuery, uid)
       return res.end(JSON.stringify(results))
     }
     if (u.pathname !== '/preview') {
@@ -161,6 +162,14 @@ const emitToMembers = (groupId, event, data, exceptId) => {
 }
 
 io.on('connection', (socket) => {
+  const getContactsWithPresence = async (userId) => {
+    const contacts = await store.getContacts(userId)
+    return contacts.map(c => {
+      const peerId = c.requester_id === userId ? c.recipient_id : c.requester_id
+      return { ...c, online: online.has(peerId) }
+    })
+  }
+
   socket.on('hello', async ({ id, name, username, pubKey }) => {
     if (typeof id !== 'string' || !id || typeof name !== 'string' || !name.trim() || !pubKey) return
     const cleanName = name.trim().slice(0, 32)
@@ -184,15 +193,6 @@ io.on('connection', (socket) => {
     known.set(id, { name: cleanName, username: cleanUsername, pubKey, lastSeen: Date.now() })
     store.upsertUser(id, cleanName, JSON.stringify(pubKey), cleanUsername)
     
-    // Send contacts to the user instead of global directory
-    const getContactsWithPresence = async (userId) => {
-      const contacts = await store.getContacts(userId)
-      return contacts.map(c => {
-        const peerId = c.requester_id === userId ? c.recipient_id : c.requester_id
-        return { ...c, online: online.has(peerId) }
-      })
-    }
-
     const contacts = await getContactsWithPresence(id)
     socket.emit('contacts', contacts)
 
@@ -220,6 +220,12 @@ io.on('connection', (socket) => {
       const sender = online.get(row.sender)
       if (sender) io.to(sender.socketId).emit('delivered', { from: id, msgId: row.id })
     }
+    
+    // Send own profile back to client
+    const myProfile = await store.getUser(id)
+    if (myProfile) {
+      socket.emit('profile', myProfile)
+    }
   })
 
   const clientId = () => socket.data.clientId
@@ -230,6 +236,14 @@ io.on('connection', (socket) => {
   socket.on('contact-request', async ({ to }) => {
     const from = clientId()
     if (!from || !to || from === to) return
+    const isSelf = from === to
+    if (isSelf) return
+    
+    // Check if already blocked
+    const existing = await store.getContacts(from)
+    const rel = existing.find(c => c.requester_id === to || c.recipient_id === to)
+    if (rel && rel.status === 'blocked') return
+
     await store.upsertContact(from, to, 'pending')
     const target = online.get(to)
     if (target) io.to(target.socketId).emit('contact-updated', await getContactsWithPresence(to))
@@ -263,6 +277,55 @@ io.on('connection', (socket) => {
     const target = online.get(to)
     if (target) io.to(target.socketId).emit('contact-updated', await getContactsWithPresence(to))
     socket.emit('contact-updated', await getContactsWithPresence(from))
+  })
+
+  socket.on('contact-block', async ({ to }) => {
+    const from = clientId()
+    if (!from || !to) return
+    await store.upsertContact(from, to, 'blocked')
+    const target = online.get(to)
+    if (target) io.to(target.socketId).emit('contact-updated', await getContactsWithPresence(to))
+    socket.emit('contact-updated', await getContactsWithPresence(from))
+  })
+
+  socket.on('contact-unblock', async ({ to }) => {
+    const from = clientId()
+    if (!from || !to) return
+    await store.deleteContact(from, to) // return to neutral state
+    const target = online.get(to)
+    if (target) io.to(target.socketId).emit('contact-updated', await getContactsWithPresence(to))
+    socket.emit('contact-updated', await getContactsWithPresence(from))
+  })
+
+  socket.on('update-profile', async ({ name, username, bio, avatar }) => {
+    const from = clientId()
+    if (!from) return
+    
+    if (username) {
+      const cleanUsername = username.trim().toLowerCase().slice(0, 32)
+      const isAvailable = await store.checkUsernameAvailable(cleanUsername, from)
+      if (!isAvailable) {
+        socket.emit('profile-error', 'Username is already taken')
+        return
+      }
+      username = cleanUsername
+    }
+
+    const cleanName = name ? name.trim().slice(0, 32) : online.get(from)?.name
+    
+    await store.updateProfile(from, { 
+      name: cleanName, 
+      username, 
+      bio: bio ? bio.trim().slice(0, 160) : '', 
+      avatar 
+    })
+    
+    if (online.has(from)) {
+      online.get(from).name = cleanName
+      if (username) online.get(from).username = username
+    }
+    
+    socket.emit('profile-updated', await store.getUser(from))
   })
 
   // ----- invitations -----

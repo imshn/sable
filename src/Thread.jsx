@@ -860,7 +860,7 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
 // target: { id, name, online, isGroup, members?, owner?, mine? }
 export function Thread({
   target, convo, clientId, onBack, onSend, onTyping, onStartCall, callBusy,
-  onReact, onDeleteMe, onDeleteAll, onForward, onLeaveGroup, onDeleteGroup, onAddMembers,
+  onReact, onDeleteMe, onDeleteAll, onForward, onLeaveGroup, onDeleteGroup, onAddMembers, onBlock,
 }) {
   const scrollRef = useRef(null)
   const [menu, setMenu] = useState(null)
@@ -1013,36 +1013,43 @@ export function Thread({
           >
             {Icon.video}
           </button>
-          {target.isGroup && (
-            <div className="composer-anchor">
-              <button
-                className="icon-btn"
-                aria-label="Group options"
-                aria-expanded={headMenu}
-                onClick={(e) => { e.stopPropagation(); setHeadMenu(!headMenu) }}
-              >
-                {Icon.dots}
-              </button>
-              {headMenu && (
-                <div className="drawer head-drawer" role="menu" onClick={(e) => e.stopPropagation()}>
-                  <button type="button" className="drawer-item" role="menuitem" onClick={() => { setHeadMenu(false); onAddMembers() }}>
-                    <span className="drawer-glyph photos">{Icon.userPlus}</span>
-                    Add members
-                  </button>
-                  <button type="button" className="drawer-item" role="menuitem" onClick={() => { setHeadMenu(false); onLeaveGroup() }}>
-                    <span className="drawer-glyph docs">{Icon.signout}</span>
-                    Leave group
-                  </button>
-                  {target.mine && (
-                    <button type="button" className="drawer-item danger" role="menuitem" onClick={() => { setHeadMenu(false); onDeleteGroup() }}>
-                      <span className="drawer-glyph danger-glyph">{Icon.trash}</span>
-                      Delete group
+          <div className="composer-anchor">
+            <button
+              className="icon-btn"
+              aria-label="Options"
+              aria-expanded={headMenu}
+              onClick={(e) => { e.stopPropagation(); setHeadMenu(!headMenu) }}
+            >
+              {Icon.dots}
+            </button>
+            {headMenu && (
+              <div className="drawer head-drawer" role="menu" onClick={(e) => e.stopPropagation()}>
+                {target.isGroup ? (
+                  <>
+                    <button type="button" className="drawer-item" role="menuitem" onClick={() => { setHeadMenu(false); onAddMembers() }}>
+                      <span className="drawer-glyph photos">{Icon.userPlus}</span>
+                      Add members
                     </button>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+                    <button type="button" className="drawer-item" role="menuitem" onClick={() => { setHeadMenu(false); onLeaveGroup() }}>
+                      <span className="drawer-glyph docs">{Icon.signout}</span>
+                      Leave group
+                    </button>
+                    {target.mine && (
+                      <button type="button" className="drawer-item danger" role="menuitem" onClick={() => { setHeadMenu(false); onDeleteGroup() }}>
+                        <span className="drawer-glyph danger-glyph">{Icon.trash}</span>
+                        Delete group
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <button type="button" className="drawer-item danger" role="menuitem" onClick={() => { setHeadMenu(false); if(window.confirm(`Block ${target.name}?`)) onBlock(target.id) }}>
+                    <span className="drawer-glyph danger-glyph">{Icon.lock}</span>
+                    Block {target.name}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
           <div className="e2e-note">
             <span className="safety-icon">{Icon.lock}</span>
             end-to-end encrypted
