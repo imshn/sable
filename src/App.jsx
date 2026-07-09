@@ -102,6 +102,7 @@ const previewText = (last, targetName) => {
   if (last.kind === 'sys') return body.text
   if (body.t === 'loc') return 'Location'
   if (body.t === 'file') {
+    if (body.caption) return body.caption
     if (body.voice) return 'Voice message'
     if (body.mime?.startsWith('image/')) return 'Photo'
     if (body.mime?.startsWith('video/')) return 'Video'

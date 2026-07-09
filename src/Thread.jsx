@@ -30,24 +30,294 @@ export const callLogText = (body, peerName) =>
 const isMedia = (m) =>
   !m.deleted && m.body?.t === 'file' && (m.body.mime?.startsWith('image/') || m.body.mime?.startsWith('video/'))
 
-// files -> encrypted-envelope payloads (shared by picker and drag-and-drop)
-async function fileEnvelopes(files, onTooBig) {
-  const out = []
-  for (const f of [...files].slice(0, 5)) {
-    if (f.size > MAX_FILE) {
-      onTooBig?.(f)
-      continue
-    }
-    const buf = await f.arrayBuffer()
-    out.push({
-      t: 'file',
-      name: f.name,
-      mime: f.type || 'application/octet-stream',
-      size: f.size,
-      data: b64encode(buf),
-    })
+// file (+ optional caption) -> encrypted-envelope payload
+async function fileEnvelope(file, caption) {
+  const buf = await file.arrayBuffer()
+  return {
+    t: 'file',
+    name: file.name,
+    mime: file.type || 'application/octet-stream',
+    size: file.size,
+    data: b64encode(buf),
+    ...(caption ? { caption } : {}),
   }
-  return out
+}
+
+const DRAW_COLORS = ['#ef4444', '#facc15', '#22c55e', '#3b82f6', '#f9fafb']
+
+// WhatsApp-style pre-send preview: caption for any file, plus draw / rotate /
+// crop / undo for images (canvas pipeline; original bytes kept if untouched).
+function SendPreview({ file, remaining, onSend, onCancel }) {
+  const isImage = file.type.startsWith('image/')
+  const isVideo = file.type.startsWith('video/')
+  const [caption, setCaption] = useState('')
+  const [tool, setTool] = useState(null) // null | 'draw' | 'crop'
+  const [color, setColor] = useState(DRAW_COLORS[0])
+  const [canUndo, setCanUndo] = useState(false)
+  const [cropReady, setCropReady] = useState(false)
+  const canvasRef = useRef(null)
+  const mediaUrl = useRef(null)
+  const history = useRef([])
+  const edited = useRef(false)
+  const drawing = useRef(false)
+  const cropStart = useRef(null)
+  const cropRect = useRef(null)
+  const cropBase = useRef(null) // ImageData under the marquee preview
+
+  if (!mediaUrl.current) mediaUrl.current = URL.createObjectURL(file)
+
+  useEffect(() => {
+    if (!isImage) return
+    const img = new Image()
+    img.onload = () => {
+      const c = canvasRef.current
+      if (!c) return
+      c.width = img.naturalWidth
+      c.height = img.naturalHeight
+      c.getContext('2d').drawImage(img, 0, 0)
+    }
+    img.src = mediaUrl.current
+    return () => URL.revokeObjectURL(mediaUrl.current)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const snapshot = () => {
+    const c = canvasRef.current
+    history.current.push({ w: c.width, h: c.height, data: c.getContext('2d').getImageData(0, 0, c.width, c.height) })
+    if (history.current.length > 10) history.current.shift()
+    edited.current = true
+    setCanUndo(true)
+  }
+
+  const undo = () => {
+    const prev = history.current.pop()
+    if (!prev) return
+    const c = canvasRef.current
+    c.width = prev.w
+    c.height = prev.h
+    c.getContext('2d').putImageData(prev.data, 0, 0)
+    setCanUndo(history.current.length > 0)
+    cancelCrop()
+  }
+
+  const rotate = () => {
+    snapshot()
+    const c = canvasRef.current
+    const tmp = document.createElement('canvas')
+    tmp.width = c.height
+    tmp.height = c.width
+    const t = tmp.getContext('2d')
+    t.translate(tmp.width / 2, tmp.height / 2)
+    t.rotate(Math.PI / 2)
+    t.drawImage(c, -c.width / 2, -c.height / 2)
+    c.width = tmp.width
+    c.height = tmp.height
+    c.getContext('2d').drawImage(tmp, 0, 0)
+    cancelCrop()
+  }
+
+  const canvasPoint = (e) => {
+    const c = canvasRef.current
+    const r = c.getBoundingClientRect()
+    return {
+      x: Math.max(0, Math.min(c.width, (e.clientX - r.left) * (c.width / r.width))),
+      y: Math.max(0, Math.min(c.height, (e.clientY - r.top) * (c.height / r.height))),
+    }
+  }
+
+  const onPointerDown = (e) => {
+    if (!tool) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    const p = canvasPoint(e)
+    const ctx = canvasRef.current.getContext('2d')
+    if (tool === 'draw') {
+      snapshot()
+      drawing.current = true
+      ctx.strokeStyle = color
+      ctx.lineWidth = Math.max(4, canvasRef.current.width / 160)
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+      ctx.beginPath()
+      ctx.moveTo(p.x, p.y)
+    } else if (tool === 'crop') {
+      const c = canvasRef.current
+      if (!cropBase.current) cropBase.current = ctx.getImageData(0, 0, c.width, c.height)
+      cropStart.current = p
+      cropRect.current = null
+      setCropReady(false)
+    }
+  }
+
+  const onPointerMove = (e) => {
+    if (!tool) return
+    const p = canvasPoint(e)
+    const c = canvasRef.current
+    const ctx = c.getContext('2d')
+    if (tool === 'draw' && drawing.current) {
+      ctx.lineTo(p.x, p.y)
+      ctx.stroke()
+    } else if (tool === 'crop' && cropStart.current) {
+      const s = cropStart.current
+      const rect = {
+        x: Math.round(Math.min(s.x, p.x)),
+        y: Math.round(Math.min(s.y, p.y)),
+        w: Math.round(Math.abs(p.x - s.x)),
+        h: Math.round(Math.abs(p.y - s.y)),
+      }
+      cropRect.current = rect
+      ctx.putImageData(cropBase.current, 0, 0)
+      ctx.fillStyle = 'rgba(0,0,0,0.5)'
+      ctx.fillRect(0, 0, c.width, c.height)
+      // restore the selected region at full brightness
+      ctx.putImageData(cropBase.current, 0, 0, rect.x, rect.y, rect.w, rect.h)
+      ctx.strokeStyle = '#2dd4bf'
+      ctx.lineWidth = Math.max(2, c.width / 400)
+      ctx.setLineDash([8, 6])
+      ctx.strokeRect(rect.x, rect.y, rect.w, rect.h)
+      ctx.setLineDash([])
+    }
+  }
+
+  const onPointerUp = () => {
+    if (tool === 'draw') drawing.current = false
+    if (tool === 'crop' && cropRect.current && cropRect.current.w > 12 && cropRect.current.h > 12) {
+      cropStart.current = null
+      setCropReady(true)
+    }
+  }
+
+  const cancelCrop = () => {
+    if (cropBase.current && canvasRef.current) {
+      const c = canvasRef.current
+      if (cropBase.current.width === c.width && cropBase.current.height === c.height) {
+        c.getContext('2d').putImageData(cropBase.current, 0, 0)
+      }
+    }
+    cropBase.current = null
+    cropRect.current = null
+    cropStart.current = null
+    setCropReady(false)
+  }
+
+  const applyCrop = () => {
+    const rect = cropRect.current
+    const base = cropBase.current
+    if (!rect || !base) return
+    snapshot()
+    const c = canvasRef.current
+    c.getContext('2d').putImageData(base, 0, 0) // clean image, no marquee
+    const tmp = document.createElement('canvas')
+    tmp.width = rect.w
+    tmp.height = rect.h
+    tmp.getContext('2d').drawImage(c, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h)
+    c.width = rect.w
+    c.height = rect.h
+    c.getContext('2d').drawImage(tmp, 0, 0)
+    cropBase.current = null
+    cropRect.current = null
+    setCropReady(false)
+    setTool(null)
+  }
+
+  const send = async () => {
+    let out = file
+    if (isImage && edited.current) {
+      if (tool === 'crop') cancelCrop()
+      const type = file.type === 'image/png' ? 'image/png' : 'image/jpeg'
+      const blob = await new Promise((res) => canvasRef.current.toBlob(res, type, 0.92))
+      out = new File([blob], file.name.replace(/\.\w+$/, type === 'image/png' ? '.png' : '.jpg'), { type })
+    }
+    onSend(out, caption.trim())
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <div className="modal send-preview" role="dialog" aria-label="Send file">
+        <header className="modal-head">
+          <h3>{isImage ? 'Send photo' : isVideo ? 'Send video' : 'Send file'}{remaining > 0 ? ` (+${remaining} more)` : ''}</h3>
+          <button className="icon-btn subtle" aria-label="Cancel" onClick={onCancel}>{Icon.x}</button>
+        </header>
+
+        {isImage ? (
+          <>
+            <div className={`edit-stage tool-${tool ?? 'none'}`}>
+              <canvas
+                ref={canvasRef}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+              />
+            </div>
+            <div className="edit-tools" role="toolbar" aria-label="Image editing">
+              <button className={`icon-btn ${canUndo ? '' : 'disabled-look'}`} aria-label="Undo" title="Undo" onClick={undo} disabled={!canUndo}>
+                {Icon.back}
+              </button>
+              <button className="icon-btn" aria-label="Rotate" title="Rotate 90°" onClick={rotate}>
+                {Icon.rotate}
+              </button>
+              <button
+                className={`icon-btn ${tool === 'draw' ? 'tool-active' : ''}`}
+                aria-label="Draw"
+                title="Draw"
+                onClick={() => { cancelCrop(); setTool(tool === 'draw' ? null : 'draw') }}
+              >
+                {Icon.pen}
+              </button>
+              {tool === 'draw' &&
+                DRAW_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    className={`swatch ${color === c ? 'picked' : ''}`}
+                    style={{ background: c }}
+                    aria-label={`Pen color ${c}`}
+                    onClick={() => setColor(c)}
+                  />
+                ))}
+              <button
+                className={`icon-btn ${tool === 'crop' ? 'tool-active' : ''}`}
+                aria-label="Crop"
+                title="Crop"
+                onClick={() => { if (tool === 'crop') { cancelCrop(); setTool(null) } else setTool('crop') }}
+              >
+                {Icon.crop}
+              </button>
+              {cropReady && (
+                <button className="primary crop-apply" onClick={applyCrop}>
+                  Apply crop
+                </button>
+              )}
+            </div>
+          </>
+        ) : isVideo ? (
+          <video className="preview-media" src={mediaUrl.current} controls />
+        ) : (
+          <div className="file-chip preview-chip">
+            <span className="file-chip-icon">{Icon.file}</span>
+            <span className="file-chip-body">
+              <span className="file-chip-name">{file.name}</span>
+              <span className="file-chip-size">{fmtSize(file.size)}</span>
+            </span>
+          </div>
+        )}
+
+        <form
+          className="caption-row"
+          onSubmit={(e) => { e.preventDefault(); send() }}
+        >
+          <input
+            value={caption}
+            onChange={(e) => setCaption(e.target.value)}
+            placeholder="Add a caption…"
+            aria-label="Caption"
+            autoComplete="off"
+            autoFocus={!isImage}
+          />
+          <button type="submit" className="primary send" aria-label="Send">
+            {Icon.send}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
 }
 
 // URLs in text become safe anchors
@@ -122,35 +392,50 @@ function MessageBody({ body, onOpenMedia }) {
     )
   }
   if (body.t === 'file') {
+    const caption = body.caption ? (
+      <span className="file-caption"><Linkified text={body.caption} /></span>
+    ) : null
     if (body.voice || body.mime?.startsWith('audio/'))
       return (
-        <span className={`audio-msg ${body.voice ? 'voice' : ''}`}>
-          {body.voice && <span className="voice-icon">{Icon.mic}</span>}
-          <audio src={body.url} controls />
-        </span>
+        <>
+          <span className={`audio-msg ${body.voice ? 'voice' : ''}`}>
+            {body.voice && <span className="voice-icon">{Icon.mic}</span>}
+            <audio src={body.url} controls />
+          </span>
+          {caption}
+        </>
       )
     if (body.mime?.startsWith('image/'))
       return (
-        <button type="button" className="media-btn" onClick={onOpenMedia} aria-label={`View ${body.name}`}>
-          <img className="media" src={body.url} alt={body.name} />
-        </button>
+        <>
+          <button type="button" className="media-btn" onClick={onOpenMedia} aria-label={`View ${body.name}`}>
+            <img className="media" src={body.url} alt={body.name} />
+          </button>
+          {caption}
+        </>
       )
     if (body.mime?.startsWith('video/'))
       return (
-        <button type="button" className="media-btn" onClick={onOpenMedia} aria-label={`Play ${body.name}`}>
-          <video className="media" src={body.url} muted preload="metadata" />
-          <span className="play-badge">{Icon.video}</span>
-        </button>
+        <>
+          <button type="button" className="media-btn" onClick={onOpenMedia} aria-label={`Play ${body.name}`}>
+            <video className="media" src={body.url} muted preload="metadata" />
+            <span className="play-badge">{Icon.video}</span>
+          </button>
+          {caption}
+        </>
       )
     return (
-      <a className="file-chip" href={body.url} download={body.name}>
-        <span className="file-chip-icon">{Icon.file}</span>
-        <span className="file-chip-body">
-          <span className="file-chip-name">{body.name}</span>
-          <span className="file-chip-size">{fmtSize(body.size)}</span>
-        </span>
-        <span className="file-chip-dl">{Icon.download}</span>
-      </a>
+      <>
+        <a className="file-chip" href={body.url} download={body.name}>
+          <span className="file-chip-icon">{Icon.file}</span>
+          <span className="file-chip-body">
+            <span className="file-chip-name">{body.name}</span>
+            <span className="file-chip-size">{fmtSize(body.size)}</span>
+          </span>
+          <span className="file-chip-dl">{Icon.download}</span>
+        </a>
+        {caption}
+      </>
     )
   }
   const firstUrl = body.text.match(URL_RE)?.[0]
@@ -342,7 +627,7 @@ function LocationModal({ onSend, onClose }) {
   )
 }
 
-function Composer({ target, onSend, onTyping }) {
+function Composer({ target, onSend, onTyping, onPickFiles }) {
   const [draft, setDraft] = useState('')
   const [rec, setRec] = useState(null)
   const [recElapsed, setRecElapsed] = useState(0)
@@ -388,10 +673,15 @@ function Composer({ target, onSend, onTyping }) {
     setDraft('')
   }
 
-  const sendFiles = async (files) => {
-    for (const env of await fileEnvelopes(files, (f) => flash(`${f.name} is over 15 MB`))) {
-      onSend(env)
-    }
+  const sendFiles = (files) => {
+    const ok = [...files].slice(0, 5).filter((f) => {
+      if (f.size > MAX_FILE) {
+        flash(`${f.name} is over 15 MB`)
+        return false
+      }
+      return true
+    })
+    if (ok.length) onPickFiles(ok)
   }
 
   const startVoice = async () => {
@@ -558,15 +848,19 @@ export function Thread({
   const [headMenu, setHeadMenu] = useState(false)
   const [lightbox, setLightbox] = useState(null)
   const [dragOver, setDragOver] = useState(false)
+  const [pending, setPending] = useState([]) // files awaiting caption/edit before send
   const dragDepth = useRef(0)
   const messages = convo?.messages ?? []
   const mediaList = messages.filter(isMedia)
 
-  const onDrop = async (e) => {
+  const queueFiles = (files) =>
+    setPending((q) => [...q, ...[...files].filter((f) => f.size <= MAX_FILE).slice(0, 5)])
+
+  const onDrop = (e) => {
     e.preventDefault()
     dragDepth.current = 0
     setDragOver(false)
-    for (const env of await fileEnvelopes(e.dataTransfer.files)) onSend(env)
+    queueFiles(e.dataTransfer.files)
   }
 
   useEffect(() => {
@@ -752,7 +1046,20 @@ export function Thread({
         )}
       </main>
 
-      <Composer target={target} onSend={onSend} onTyping={onTyping} />
+      <Composer target={target} onSend={onSend} onTyping={onTyping} onPickFiles={queueFiles} />
+
+      {pending.length > 0 && (
+        <SendPreview
+          key={pending[0].name + pending[0].size + pending.length}
+          file={pending[0]}
+          remaining={pending.length - 1}
+          onCancel={() => setPending((q) => q.slice(1))}
+          onSend={async (file, caption) => {
+            onSend(await fileEnvelope(file, caption))
+            setPending((q) => q.slice(1))
+          }}
+        />
+      )}
 
       {menu && (
         <ContextMenu

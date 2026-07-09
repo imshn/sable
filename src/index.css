@@ -1720,6 +1720,86 @@ video.media { width: min(320px, 62vw); }
 
 .bw-toast { border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
 
+/* ---------- Send preview & image editor ---------- */
+
+.modal.send-preview { width: min(560px, 94vw); }
+
+.edit-stage {
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  border-radius: 14px;
+  overflow: hidden;
+  min-height: 180px;
+}
+
+.edit-stage canvas {
+  max-width: 100%;
+  max-height: min(48vh, 460px);
+  display: block;
+  touch-action: none;
+}
+
+.edit-stage.tool-draw canvas { cursor: crosshair; }
+.edit-stage.tool-crop canvas { cursor: crosshair; }
+
+.edit-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.edit-tools .icon-btn {
+  min-width: 42px;
+  min-height: 42px;
+}
+
+.edit-tools .icon-btn.tool-active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-soft);
+}
+
+.edit-tools .icon-btn:disabled { opacity: 0.35; cursor: default; }
+
+.swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  transition: transform 120ms var(--spring);
+}
+
+.swatch:hover { transform: scale(1.15); }
+.swatch.picked { border-color: var(--text); transform: scale(1.15); }
+
+.crop-apply {
+  min-height: 40px;
+  margin: 0 0 0 auto;
+  padding: 0 16px;
+  font-size: 0.85rem;
+}
+
+.preview-media {
+  width: 100%;
+  max-height: min(48vh, 460px);
+  border-radius: 14px;
+  background: var(--bg);
+}
+
+.preview-chip { max-width: none; }
+
+.caption-row { display: flex; gap: 8px; }
+.caption-row input { border-radius: 999px; padding-left: 18px; }
+
+.file-caption {
+  display: block;
+  padding: 4px 6px 2px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 @media (max-width: 860px) {
   .call-stage.with-chat .call-main { display: none; }
   .call-chat { width: 100%; border-left: none; }
