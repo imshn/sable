@@ -230,7 +230,7 @@ io.on('connection', (socket) => {
   socket.on('contact-request', async ({ to }) => {
     const from = clientId()
     if (!from || !to || from === to) return
-    store.upsertContact(from, to, 'pending')
+    await store.upsertContact(from, to, 'pending')
     const target = online.get(to)
     if (target) io.to(target.socketId).emit('contact-updated', await getContactsWithPresence(to))
     socket.emit('contact-updated', await getContactsWithPresence(from))
@@ -240,7 +240,7 @@ io.on('connection', (socket) => {
     const from = clientId()
     if (!from || !to) return
     // "to" is the original requester, "from" is accepting
-    store.upsertContact(to, from, 'accepted')
+    await store.upsertContact(to, from, 'accepted')
     const target = online.get(to)
     if (target) io.to(target.socketId).emit('contact-updated', await getContactsWithPresence(to))
     socket.emit('contact-updated', await getContactsWithPresence(from))
@@ -250,7 +250,7 @@ io.on('connection', (socket) => {
   socket.on('contact-reject', async ({ to }) => {
     const from = clientId()
     if (!from || !to) return
-    store.upsertContact(to, from, 'rejected')
+    await store.upsertContact(to, from, 'rejected')
     const target = online.get(to)
     if (target) io.to(target.socketId).emit('contact-updated', await getContactsWithPresence(to))
     socket.emit('contact-updated', await getContactsWithPresence(from))
@@ -259,7 +259,7 @@ io.on('connection', (socket) => {
   socket.on('contact-remove', async ({ to }) => {
     const from = clientId()
     if (!from || !to) return
-    store.deleteContact(from, to)
+    await store.deleteContact(from, to)
     const target = online.get(to)
     if (target) io.to(target.socketId).emit('contact-updated', await getContactsWithPresence(to))
     socket.emit('contact-updated', await getContactsWithPresence(from))
