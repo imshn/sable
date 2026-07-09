@@ -74,7 +74,8 @@ async function turnServers() {
   } catch (e) {
     console.error('turn fetch failed', e.message)
   }
-  turnCache = { at: Date.now(), servers }
+  // don't sit on an empty answer — retry in a minute (e.g. plan just activated)
+  turnCache = { at: servers.length ? Date.now() : Date.now() - 3540_000, servers }
   return servers
 }
 
