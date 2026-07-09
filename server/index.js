@@ -23,58 +23,36 @@ const metaTags = (html) => {
 const decodeEntities = (s) =>
   s?.replace(/&(amp|lt|gt|quot|#39|#x27);/g, (m) => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#x27;': "'" })[m])
 
-// TURN credentials for calls across carrier-grade NAT (Jio/Airtel etc).
-// Configure either METERED_DOMAIN + METERED_API_KEY (free tier at metered.ca)
-// or static TURN_URLS + TURN_USERNAME + TURN_CREDENTIAL. Cached ~1 hour.
+// Cloudflare Realtime TURN: mint short-lived credentials server-side so the
+// long-lived API token never reaches a browser. Credentials live 2h; we cache
+// them for 1h so clients always receive at least an hour of validity.
+// https://developers.cloudflare.com/realtime/turn/generate-credentials/
 let turnCache = { at: 0, servers: [] }
 async function turnServers() {
   if (Date.now() - turnCache.at < 3600_000) return turnCache.servers
   let servers = []
   try {
-    if (process.env.METERED_DOMAIN && process.env.METERED_API_KEY) {
+    if (process.env.CF_TURN_KEY_ID && process.env.CF_TURN_API_TOKEN) {
       const r = await fetch(
-        `https://${process.env.METERED_DOMAIN}/api/v1/turn/credentials?apiKey=${process.env.METERED_API_KEY}`,
-        { signal: AbortSignal.timeout(6000) }
-      )
-      if (r.ok) servers = await r.json()
-    } else if (process.env.METERED_DOMAIN && process.env.METERED_SECRET_KEY) {
-      // mint a short-lived TURN credential with the admin secret key
-      const r = await fetch(
-        `https://${process.env.METERED_DOMAIN}/api/v1/turn/credential?secretKey=${process.env.METERED_SECRET_KEY}`,
+        `https://rtc.live.cloudflare.com/v1/turn/keys/${process.env.CF_TURN_KEY_ID}/credentials/generate-ice-servers`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ expiryInSeconds: 7200, label: 'sable' }),
+          headers: {
+            Authorization: `Bearer ${process.env.CF_TURN_API_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ ttl: 7200 }),
           signal: AbortSignal.timeout(6000),
         }
       )
-      const cred = await r.json()
-      if (r.ok && cred.username) {
-        servers = [{
-          urls: [
-            'turn:standard.relay.metered.ca:80',
-            'turn:standard.relay.metered.ca:80?transport=tcp',
-            'turn:standard.relay.metered.ca:443',
-            'turns:standard.relay.metered.ca:443?transport=tcp',
-          ],
-          username: cred.username,
-          credential: cred.password,
-        }]
-        turnCache = { at: Date.now() - 1800_000, servers } // refresh well before expiry
-        return servers
-      }
-      console.error('metered mint failed', JSON.stringify(cred).slice(0, 200))
-    } else if (process.env.TURN_URLS) {
-      servers = [{
-        urls: process.env.TURN_URLS.split(','),
-        username: process.env.TURN_USERNAME,
-        credential: process.env.TURN_CREDENTIAL,
-      }]
+      const body = await r.json()
+      if (r.ok && Array.isArray(body.iceServers)) servers = body.iceServers
+      else console.error('cloudflare turn mint failed', r.status, JSON.stringify(body).slice(0, 200))
     }
   } catch (e) {
     console.error('turn fetch failed', e.message)
   }
-  // don't sit on an empty answer — retry in a minute (e.g. plan just activated)
+  // don't sit on an empty answer — retry in a minute
   turnCache = { at: servers.length ? Date.now() : Date.now() - 3540_000, servers }
   return servers
 }

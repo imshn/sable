@@ -6,8 +6,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "concurrently -k -n server,client -c cyan,magenta \"node server/index.js\" \"vite\"",
-    "server": "node server/index.js",
+    "dev": "concurrently -k -n server,client -c cyan,magenta \"node --env-file=.env.local server/index.js\" \"vite\"",
+    "server": "node --env-file=.env.local server/index.js",
     "build": "vite build",
     "preview": "vite preview"
   },

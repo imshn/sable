@@ -61,7 +61,7 @@ Vite + React client, socket.io relay. The server never sees plaintext.
 
 Vercel alone can't host the relay: its functions cannot hold WebSocket
 connections and don't share the in-memory presence/group registry.
-Calls use free openrelay TURN servers so WebRTC connects across
+Calls use Cloudflare Realtime TURN servers so WebRTC connects across
 carrier-grade NAT (Jio/Airtel mobile networks).
 
 Keepalive: a GitHub Action pings the relay every 10 minutes

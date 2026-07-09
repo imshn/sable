@@ -1852,7 +1852,43 @@ video.media { width: min(320px, 62vw); }
 .reply-bar-body { display: grid; gap: 0; min-width: 0; flex: 1; }
 .reply-bar .quote-text { -webkit-line-clamp: 1; }
 
-.msg { transition: transform 200ms var(--spring); }
+/* a quoted reply stacks: quote on top, message content below */
+.bubble.has-quote {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.bubble.has-quote .bubble-meta {
+  align-self: flex-end;
+  transform: none;
+  padding-top: 2px;
+}
+
+.msg {
+  position: relative;
+  transition: transform 200ms var(--spring);
+  touch-action: pan-y; /* horizontal swipes are ours, vertical stays scroll */
+}
+
+.swipe-badge {
+  position: absolute;
+  left: -46px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease, transform 140ms var(--spring);
+}
+
+.msg.self .swipe-badge { left: -46px; }
+.swipe-badge svg { width: 16px; height: 16px; }
 
 .msg.flash .bubble {
   animation: flash-pulse 1.5s ease;

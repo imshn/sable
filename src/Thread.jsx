@@ -924,33 +924,45 @@ export function Thread({
     setTimeout(() => el.classList.remove('flash'), 1600)
   }
 
-  // WhatsApp swipe-right-to-reply (touch)
-  const onTouchStart = (e, m) => {
-    const t = e.touches[0]
-    swipe.current = { x: t.clientX, y: t.clientY, dx: 0, el: e.currentTarget, m, live: true }
+  // WhatsApp swipe/drag-right-to-reply — pointer events cover touch AND mouse.
+  // The gesture only arms after 14px of horizontal intent, so clicks, text
+  // selection, and vertical scrolling all behave normally.
+  const onSwipeStart = (e, m) => {
+    if (m.deleted || m.kind === 'call' || m.kind === 'sys' || m.kind === 'error') return
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    swipe.current = { x: e.clientX, y: e.clientY, dx: 0, el: e.currentTarget, m, live: true, armed: false, pid: e.pointerId }
   }
-  const onTouchMove = (e) => {
+  const onSwipeMove = (e) => {
     const s = swipe.current
     if (!s?.live) return
-    const t = e.touches[0]
-    const dx = t.clientX - s.x
-    if (Math.abs(t.clientY - s.y) > 42) {
-      s.live = false
-      s.el.style.transform = ''
-      return
+    const dx = e.clientX - s.x
+    const dy = Math.abs(e.clientY - s.y)
+    if (!s.armed) {
+      if (dy > 30) { s.live = false; return } // vertical intent: scroll/select
+      if (dx < 14) return
+      s.armed = true
+      s.el.setPointerCapture?.(s.pid)
+      document.body.style.userSelect = 'none'
     }
-    if (dx > 0) {
-      s.dx = dx
-      s.el.style.transition = 'none'
-      s.el.style.transform = `translateX(${Math.min(dx, 72)}px)`
+    s.dx = dx
+    const pull = Math.min(Math.max(dx, 0), 76)
+    s.el.style.transition = 'none'
+    s.el.style.transform = `translateX(${pull}px)`
+    const badge = s.el.querySelector('.swipe-badge')
+    if (badge) {
+      badge.style.opacity = Math.min(pull / 60, 1)
+      badge.style.transform = `translateY(-50%) scale(${0.6 + Math.min(pull / 60, 1) * 0.4})`
     }
   }
-  const onTouchEnd = () => {
+  const onSwipeEnd = () => {
     const s = swipe.current
     if (!s) return
+    document.body.style.userSelect = ''
     s.el.style.transition = ''
     s.el.style.transform = ''
-    if (s.live && s.dx > 52) startReply(s.m)
+    const badge = s.el.querySelector('.swipe-badge')
+    if (badge) { badge.style.opacity = 0; badge.style.transform = '' }
+    if (s.live && s.armed && s.dx > 56) startReply(s.m)
     swipe.current = null
   }
 
@@ -1073,11 +1085,13 @@ export function Thread({
               data-msg-id={m.id}
               className={`msg ${m.kind === 'self' ? 'self' : 'peer'} ${grouped ? 'grouped' : ''} ${reactions.length ? 'reacted' : ''}`}
               onContextMenu={(e) => openMenu(e, m)}
-              onTouchStart={(e) => onTouchStart(e, m)}
-              onTouchMove={onTouchMove}
-              onTouchEnd={onTouchEnd}
+              onPointerDown={(e) => onSwipeStart(e, m)}
+              onPointerMove={onSwipeMove}
+              onPointerUp={onSwipeEnd}
+              onPointerCancel={onSwipeEnd}
             >
-              <div className={`bubble ${rich ? 'rich' : ''}`}>
+              <span className="swipe-badge" aria-hidden="true">{Icon.reply}</span>
+              <div className={`bubble ${rich ? 'rich' : ''} ${m.body.reply && !m.deleted ? 'has-quote' : ''}`}>
                 {m.body.reply && !m.deleted && (
                   <button type="button" className="quote" onClick={() => jumpTo(m.body.reply.id)}>
                     <span className="quote-name">{m.body.reply.name}</span>
