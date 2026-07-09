@@ -140,21 +140,14 @@ function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, onShowPro
         <div className="me">
           <span className={`status-dot ${connected ? 'on' : ''}`} aria-hidden="true" />
           {name}
-          <ThemeToggle />
-          <button className="icon-btn subtle" aria-label="Profile Settings" title="Profile Settings" onClick={onShowProfile}>
-            {Icon.settings}
-          </button>
           <button className="icon-btn subtle" aria-label="New Group" title="New Group" onClick={onNewGroup}>
             {Icon.plus}
-          </button>
-          <button className="icon-btn subtle" aria-label="Invite a friend" title="Invite a friend" onClick={onShowInvite}>
-            {Icon.userPlus}
           </button>
           <button className="icon-btn subtle" aria-label="Contacts" title="Contacts" onClick={() => onSelect('contacts')}>
             {Icon.users}
           </button>
-          <button className="icon-btn subtle" aria-label="Sign out" onClick={onSignOut}>
-            {Icon.signout}
+          <button className="icon-btn subtle" aria-label="Profile & Settings" title="Profile & Settings" onClick={onShowProfile}>
+            {Icon.settings}
           </button>
         </div>
       </header>
@@ -937,6 +930,8 @@ function Shell({ name, username, onSignOut }) {
           socket={socketRef.current}
           blockedContacts={contacts.filter(c => c.status === 'blocked' && c.isRequester)}
           unblockContact={unblockContact}
+          onShowInvite={() => { setShowProfile(false); setShowInviteModal(true) }}
+          onSignOut={onSignOut}
           onUpdateProfile={(profile) => {
             socketRef.current?.emit('update-profile', profile)
           }}

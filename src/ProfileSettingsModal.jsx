@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import { Icon } from './icons.jsx'
 
-export function ProfileSettingsModal({ user, onClose, onUpdateProfile, socket, blockedContacts = [], unblockContact }) {
-  const [activeTab, setActiveTab] = useState('profile') // 'profile' or 'privacy'
+export function ProfileSettingsModal({ user, onClose, onUpdateProfile, socket, blockedContacts = [], unblockContact, onShowInvite, onSignOut }) {
+  const [activeTab, setActiveTab] = useState('profile') // 'profile' | 'privacy' | 'general'
   const [name, setName] = useState(user?.name || '')
   const [username, setUsername] = useState(user?.username || '')
   const [bio, setBio] = useState(user?.bio || '')
@@ -70,6 +70,21 @@ export function ProfileSettingsModal({ user, onClose, onUpdateProfile, socket, b
               style={{ fontWeight: activeTab === 'privacy' ? '600' : 'normal', backgroundColor: activeTab === 'privacy' ? 'var(--bg-hover)' : 'transparent' }}
             >
               <span className="drawer-glyph">{Icon.lock}</span> Privacy
+            </button>
+            <button 
+              className={`drawer-item ${activeTab === 'general' ? 'active' : ''}`} 
+              onClick={() => setActiveTab('general')}
+              style={{ fontWeight: activeTab === 'general' ? '600' : 'normal', backgroundColor: activeTab === 'general' ? 'var(--bg-hover)' : 'transparent' }}
+            >
+              <span className="drawer-glyph">{Icon.settings}</span> General
+            </button>
+          </div>
+          <div style={{ borderTop: '1px solid var(--border)', padding: '12px' }}>
+            <button 
+              className="drawer-item danger"
+              onClick={() => { onClose(); onSignOut?.() }}
+            >
+              <span className="drawer-glyph danger-glyph">{Icon.signout}</span> Sign Out
             </button>
           </div>
         </div>
@@ -141,6 +156,40 @@ export function ProfileSettingsModal({ user, onClose, onUpdateProfile, socket, b
                   </button>
                 </div>
               </form>
+            ) : activeTab === 'general' ? (
+              <div style={{ maxWidth: '480px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                <div className="form-group">
+                  <label>Appearance</label>
+                  <p className="empty-sub" style={{ marginBottom: '12px' }}>Choose your preferred theme.</p>
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    {['dark', 'light'].map(t => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => { document.documentElement.dataset.theme = t; localStorage.setItem('sable-theme', t) }}
+                        style={{
+                          flex: 1, padding: '12px', borderRadius: 'var(--radius)',
+                          border: '2px solid',
+                          borderColor: (localStorage.getItem('sable-theme') ?? 'dark') === t ? 'var(--accent)' : 'var(--border)',
+                          backgroundColor: 'var(--surface-2)', color: 'var(--text)',
+                          cursor: 'pointer', fontWeight: '500', textTransform: 'capitalize',
+                        }}
+                      >
+                        {t === 'dark' ? '🌙' : '☀️'} {t}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Invite a Friend</label>
+                  <p className="empty-sub" style={{ marginBottom: '12px' }}>Generate a shareable link so someone can connect with you.</p>
+                  <button type="button" className="secondary" style={{ width: 'auto', display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 20px' }}
+                    onClick={() => { onClose(); onShowInvite?.() }}>
+                    <span>{Icon.userPlus}</span> Generate Invite Link
+                  </button>
+                </div>
+              </div>
             ) : (
               <div className="privacy-section" style={{ maxWidth: '480px' }}>
                 <div className="form-group privacy-placeholder">
