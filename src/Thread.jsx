@@ -861,7 +861,7 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
 // target: { id, name, online, isGroup, members?, owner?, mine? }
 export function Thread({
   target, convo, clientId, onBack, onSend, onTyping, onStartCall, callBusy,
-  onReact, onDeleteMe, onDeleteAll, onForward, onLeaveGroup, onDeleteGroup, onAddMembers, onBlock,
+  onReact, onDeleteMe, onDeleteAll, onForward, onLeaveGroup, onDeleteGroup, onAddMembers, onBlock, onUnblock,
 }) {
   const scrollRef = useRef(null)
   const [menu, setMenu] = useState(null)
@@ -1010,7 +1010,7 @@ export function Thread({
             className="icon-btn"
             aria-label={`Video call ${target.name}`}
             title="Video call"
-            disabled={!target.online || callBusy}
+            disabled={!target.online || callBusy || (target.status === 'blocked' && target.isRequester)}
             onClick={onStartCall}
           >
             {Icon.video}
@@ -1043,6 +1043,11 @@ export function Thread({
                       </button>
                     )}
                   </>
+                ) : target.status === 'blocked' && target.isRequester ? (
+                  <button type="button" className="drawer-item" role="menuitem" onClick={() => { setHeadMenu(false); onUnblock?.(target.id) }}>
+                    <span className="drawer-glyph">{Icon.check}</span>
+                    Unblock {target.name}
+                  </button>
                 ) : (
                   <button type="button" className="drawer-item danger" role="menuitem" onClick={() => { setHeadMenu(false); setBlockModal(true) }}>
                     <span className="drawer-glyph danger-glyph">{Icon.block}</span>
@@ -1165,7 +1170,14 @@ export function Thread({
           </button>
         </div>
       )}
-      <Composer target={target} onSend={sendWithReply} onTyping={onTyping} onPickFiles={queueFiles} />
+      {target.status === 'blocked' && target.isRequester ? (
+        <div style={{ padding: '24px', textAlign: 'center', backgroundColor: 'var(--surface-2)', borderTop: '1px solid var(--border)' }}>
+          <p style={{ margin: '0 0 16px 0', color: 'var(--muted)' }}>You blocked this contact. You can't send messages or call them.</p>
+          <button type="button" className="secondary" onClick={() => onUnblock?.(target.id)}>Unblock</button>
+        </div>
+      ) : (
+        <Composer target={target} onSend={sendWithReply} onTyping={onTyping} onPickFiles={queueFiles} />
+      )}
 
       {pending.length > 0 && (
         <SendPreview

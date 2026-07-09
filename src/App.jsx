@@ -831,6 +831,7 @@ function Shell({ name, username, onSignOut }) {
             onDeleteGroup={() => { deleteGroup(activeId); setActiveId(null) }}
             onAddMembers={() => setAddingTo(activeId)}
             onBlock={(id) => { blockContact(id); setActiveId(null) }}
+            onUnblock={(id) => unblockContact(id)}
           />
         ) : (
           <section className="thread placeholder">
