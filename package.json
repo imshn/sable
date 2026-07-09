@@ -12,6 +12,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@libsql/client": "^0.17.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "socket.io": "^4.8.1",

@@ -1,10 +1,11 @@
-// Sable relay server — routes ciphertext, public keys, and WebRTC signaling only.
-// Plaintext never touches this process. Users and groups live in memory; nothing persists.
-// The one exception to blindness: /preview fetches OG tags for link cards, so the
-// relay sees previewed URLs (same tradeoff WhatsApp makes for link previews).
+// Sable relay server — routes ciphertext, public keys, and WebRTC signaling.
+// With Turso configured it also persists ciphertext history and offline
+// deliveries; the server still cannot read any message content.
+// The one exception to blindness: /preview fetches OG tags for link cards.
 import { Server } from 'socket.io'
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
+import { migrate, store } from './db.js'
 
 const PORT = process.env.PORT || 3001
 
@@ -65,19 +66,41 @@ const io = new Server(httpServer, {
   maxHttpBufferSize: 40e6, // encrypted file payloads (15MB file ≈ 28MB b64+json)
 })
 
-const users = new Map() // clientId -> { socketId, name, pubKey }
+// presence + latest keys live in memory; Turso remembers everyone across restarts
+const online = new Map() // clientId -> { socketId, name, pubKey }
+const known = new Map() // clientId -> { name, pubKey, lastSeen } (persisted users)
 const groups = new Map() // groupId -> { name, owner, members: Set<clientId> }
 
-const directory = () =>
-  [...users.entries()].map(([id, u]) => ({ id, name: u.name, pubKey: u.pubKey }))
+await migrate()
+for (const u of await store.allUsers()) {
+  known.set(u.id, { name: u.name, pubKey: JSON.parse(u.pubkey), lastSeen: Number(u.last_seen) })
+}
+for (const g of await store.loadGroups()) {
+  groups.set(g.id, { name: g.name, owner: g.owner, members: new Set(g.members) })
+}
+console.log(`restored ${known.size} users, ${groups.size} groups`)
+
+const directory = () => {
+  const list = []
+  for (const [id, u] of known) {
+    list.push({ id, name: u.name, pubKey: u.pubKey, online: online.has(id), lastSeen: u.lastSeen })
+  }
+  for (const [id, u] of online) {
+    if (!known.has(id)) list.push({ id, name: u.name, pubKey: u.pubKey, online: true, lastSeen: Date.now() })
+  }
+  return list
+}
+
+const broadcastDirectory = () => io.emit('directory', directory())
 
 const groupInfo = (id) => {
   const g = groups.get(id)
+  const nameOf = (m) => online.get(m)?.name ?? known.get(m)?.name ?? 'unknown'
   return {
     id,
     name: g.name,
     owner: g.owner,
-    members: [...g.members].map((m) => ({ id: m, name: users.get(m)?.name ?? 'unknown' })),
+    members: [...g.members].map((m) => ({ id: m, name: nameOf(m) })),
   }
 }
 
@@ -86,118 +109,172 @@ const emitToMembers = (groupId, event, data, exceptId) => {
   if (!g) return
   for (const m of g.members) {
     if (m === exceptId) continue
-    const u = users.get(m)
+    const u = online.get(m)
     if (u) io.to(u.socketId).emit(event, data)
   }
 }
 
 io.on('connection', (socket) => {
-  socket.on('hello', ({ id, name, pubKey }) => {
+  socket.on('hello', async ({ id, name, pubKey }) => {
     if (typeof id !== 'string' || !id || typeof name !== 'string' || !name.trim() || !pubKey) return
+    const cleanName = name.trim().slice(0, 32)
     socket.data.clientId = id
-    users.set(id, { socketId: socket.id, name: name.trim().slice(0, 32), pubKey })
-    io.emit('directory', directory())
-    // re-sync group memberships after a reload
+    online.set(id, { socketId: socket.id, name: cleanName, pubKey })
+    known.set(id, { name: cleanName, pubKey, lastSeen: Date.now() })
+    store.upsertUser(id, cleanName, JSON.stringify(pubKey))
+    broadcastDirectory()
+
     for (const [gid, g] of groups) {
       if (g.members.has(id)) socket.emit('group-added', groupInfo(gid))
+    }
+
+    // ciphertext history + anything that arrived while offline
+    const rows = await store.backlog(id)
+    const undelivered = await store.undeliveredSenders(id)
+    socket.emit('backlog', rows.map((r) => ({
+      id: r.id,
+      from: r.sender,
+      fromName: known.get(r.sender)?.name ?? 'unknown',
+      senderPub: JSON.parse(r.sender_pub),
+      groupId: r.group_id,
+      payload: JSON.parse(r.payload),
+      ts: Number(r.ts),
+    })))
+    for (const row of undelivered) {
+      store.markDelivered(row.id, id)
+      const sender = online.get(row.sender)
+      if (sender) io.to(sender.socketId).emit('delivered', { from: id, msgId: row.id })
     }
   })
 
   const clientId = () => socket.data.clientId
+  const myPub = () => JSON.stringify(online.get(clientId())?.pubKey ?? null)
 
   // ----- direct routing -----
   const route = (event) => (msg) => {
     const from = clientId()
-    const target = from && msg && users.get(msg.to)
+    const target = from && msg && online.get(msg.to)
     if (!target) return
-    io.to(target.socketId).emit(event, { ...msg, from, fromName: users.get(from)?.name })
+    io.to(target.socketId).emit(event, { ...msg, from, fromName: online.get(from)?.name })
   }
 
-  socket.on('dm', route('dm'))
   socket.on('typing', route('typing'))
-  socket.on('delivered', route('delivered'))
   for (const ev of ['call-offer', 'call-answer', 'call-ice', 'call-end', 'call-decline', 'share-state']) {
     socket.on(ev, route(ev))
   }
+
+  // dm: { to, id, payload, selfPayload?, ts } — payload sealed for the
+  // recipient, selfPayload sealed for the sender (their own history copy)
+  socket.on('dm', ({ to, id, payload, selfPayload, ts }) => {
+    const from = clientId()
+    if (!from || !to || !payload) return
+    const recipient = online.get(to)
+    const wasRouted = !!recipient
+    if (recipient) {
+      io.to(recipient.socketId).emit('dm', { from, fromName: online.get(from)?.name, id, payload, ts })
+    }
+    if (known.has(to) || wasRouted) {
+      store.saveMessage(id, to, from, myPub(), null, JSON.stringify(payload), ts, false)
+    }
+    if (selfPayload) store.saveMessage(id, from, from, myPub(), null, JSON.stringify(selfPayload), ts, true)
+  })
+
+  socket.on('delivered', ({ to, msgId }) => {
+    const from = clientId()
+    if (!from || !to) return
+    store.markDelivered(msgId, from)
+    const target = online.get(to)
+    if (target) io.to(target.socketId).emit('delivered', { from, msgId })
+  })
 
   // ----- groups -----
   socket.on('group-create', ({ name, members }) => {
     const from = clientId()
     if (!from || typeof name !== 'string' || !name.trim() || !Array.isArray(members)) return
     const id = `g-${randomUUID()}`
-    const all = new Set([from, ...members.filter((m) => users.has(m))])
+    const all = new Set([from, ...members.filter((m) => known.has(m) || online.has(m))])
     if (all.size < 2) return
     groups.set(id, { name: name.trim().slice(0, 48), owner: from, members: all })
+    store.saveGroup(id, name.trim().slice(0, 48), from, [...all])
     emitToMembers(id, 'group-added', groupInfo(id))
   })
 
   socket.on('group-delete', ({ groupId }) => {
     const g = groups.get(groupId)
     if (!g || g.owner !== clientId()) return
-    emitToMembers(groupId, 'group-removed', { id: groupId, by: users.get(clientId())?.name })
+    emitToMembers(groupId, 'group-removed', { id: groupId, by: online.get(clientId())?.name })
     groups.delete(groupId)
+    store.deleteGroup(groupId)
   })
 
   socket.on('group-leave', ({ groupId }) => {
     const g = groups.get(groupId)
     const from = clientId()
     if (!g || !g.members.has(from)) return
-    emitToMembers(groupId, 'group-left', { id: groupId, memberId: from, name: users.get(from)?.name })
+    emitToMembers(groupId, 'group-left', { id: groupId, memberId: from, name: online.get(from)?.name })
     g.members.delete(from)
     if (g.members.size < 2) {
       emitToMembers(groupId, 'group-removed', { id: groupId })
       groups.delete(groupId)
+      store.deleteGroup(groupId)
     } else {
       if (g.owner === from) g.owner = [...g.members][0]
-      emitToMembers(groupId, 'group-added', groupInfo(groupId)) // resync roster
+      store.saveGroup(groupId, g.name, g.owner, [...g.members])
+      emitToMembers(groupId, 'group-added', groupInfo(groupId))
     }
-  })
-
-  // group message: payloads = { [memberId]: { iv, ct } }, one ciphertext per member
-  socket.on('gdm', ({ groupId, id, payloads, ts }) => {
-    const from = clientId()
-    const g = groups.get(groupId)
-    if (!from || !g || !g.members.has(from) || !payloads) return
-    for (const [memberId, payload] of Object.entries(payloads)) {
-      if (!g.members.has(memberId) || memberId === from) continue
-      const u = users.get(memberId)
-      if (u) io.to(u.socketId).emit('gdm', { groupId, from, fromName: users.get(from)?.name, id, payload, ts })
-    }
-  })
-
-  socket.on('gtyping', ({ groupId }) => {
-    const from = clientId()
-    if (!groups.get(groupId)?.members.has(from)) return
-    emitToMembers(groupId, 'gtyping', { groupId, from, name: users.get(from)?.name }, from)
   })
 
   socket.on('group-invite', ({ groupId, members }) => {
     const g = groups.get(groupId)
     const from = clientId()
     if (!g || !g.members.has(from) || !Array.isArray(members)) return
-    const added = members.filter((m) => users.has(m) && !g.members.has(m))
+    const added = members.filter((m) => (known.has(m) || online.has(m)) && !g.members.has(m))
     if (!added.length) return
     added.forEach((m) => g.members.add(m))
-    const names = added.map((m) => users.get(m)?.name).join(', ')
+    store.saveGroup(groupId, g.name, g.owner, [...g.members])
+    const names = added.map((m) => online.get(m)?.name ?? known.get(m)?.name).join(', ')
     emitToMembers(groupId, 'group-added', groupInfo(groupId))
     for (const m of g.members) {
       if (added.includes(m)) continue
-      const u = users.get(m)
+      const u = online.get(m)
       if (u) io.to(u.socketId).emit('group-joined', { id: groupId, names })
     }
   })
 
+  // gdm payloads: { [memberId]: { iv, ct } } — may include the sender's own
+  // history copy, which is stored but never routed
+  socket.on('gdm', ({ groupId, id, payloads, ts }) => {
+    const from = clientId()
+    const g = groups.get(groupId)
+    if (!from || !g || !g.members.has(from) || !payloads) return
+    for (const [memberId, payload] of Object.entries(payloads)) {
+      if (!g.members.has(memberId)) continue
+      if (memberId === from) {
+        store.saveMessage(id, from, from, myPub(), groupId, JSON.stringify(payload), ts, true)
+        continue
+      }
+      const u = online.get(memberId)
+      if (u) io.to(u.socketId).emit('gdm', { groupId, from, fromName: online.get(from)?.name, id, payload, ts })
+      store.saveMessage(id, memberId, from, myPub(), groupId, JSON.stringify(payload), ts, !!u)
+    }
+  })
+
+  socket.on('gtyping', ({ groupId }) => {
+    const from = clientId()
+    if (!groups.get(groupId)?.members.has(from)) return
+    emitToMembers(groupId, 'gtyping', { groupId, from, name: online.get(from)?.name }, from)
+  })
+
   // group calls: ring + mesh membership announcements; offers/ice go via direct routes.
-  // gcall-ring accepts an optional `to` for targeted invites into an ongoing call.
   for (const ev of ['gcall-ring', 'gcall-join', 'gcall-leave']) {
     socket.on(ev, ({ groupId, to }) => {
       const from = clientId()
       const g = groups.get(groupId)
       if (!g?.members.has(from)) return
-      const data = { groupId, from, name: users.get(from)?.name }
+      const data = { groupId, from, name: online.get(from)?.name }
       if (ev === 'gcall-ring' && to) {
         if (!g.members.has(to)) return
-        const u = users.get(to)
+        const u = online.get(to)
         if (u) io.to(u.socketId).emit(ev, data)
         return
       }
@@ -207,9 +284,12 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     const id = clientId()
-    if (id && users.get(id)?.socketId === socket.id) {
-      users.delete(id)
-      io.emit('directory', directory())
+    if (id && online.get(id)?.socketId === socket.id) {
+      online.delete(id)
+      const k = known.get(id)
+      if (k) k.lastSeen = Date.now()
+      store.touchUser(id)
+      broadcastDirectory()
     }
   })
 })

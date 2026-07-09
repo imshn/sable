@@ -455,7 +455,6 @@ function Composer({ target, onSend, onTyping }) {
           className="icon-btn ghost"
           aria-label="Attach"
           aria-expanded={menu === 'attach'}
-          disabled={!target.online}
           onClick={(e) => { e.stopPropagation(); setMenu(menu === 'attach' ? null : 'attach') }}
         >
           {Icon.clip}
@@ -484,7 +483,6 @@ function Composer({ target, onSend, onTyping }) {
           className="icon-btn ghost"
           aria-label="Share location"
           aria-expanded={menu === 'location'}
-          disabled={!target.online}
           onClick={(e) => { e.stopPropagation(); setMenu(menu === 'location' ? null : 'location') }}
         >
           {Icon.pin}
@@ -520,17 +518,16 @@ function Composer({ target, onSend, onTyping }) {
         ref={inputRef}
         value={draft}
         onChange={(e) => { setDraft(e.target.value); onTyping() }}
-        placeholder={target.online ? 'Write privately…' : `${target.name} is offline — messages won't be delivered`}
+        placeholder={target.online || target.isGroup ? 'Write privately…' : `${target.name} is offline — they'll get it when back`}
         aria-label="Message"
         autoComplete="off"
-        disabled={!target.online}
       />
       {draft.trim() ? (
         <button type="submit" className="primary send" aria-label="Send message">
           {Icon.send}
         </button>
       ) : (
-        <button type="button" className="primary send" aria-label="Record voice message" disabled={!target.online} onClick={startVoice}>
+        <button type="button" className="primary send" aria-label="Record voice message" onClick={startVoice}>
           {Icon.mic}
         </button>
       )}

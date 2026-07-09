@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { io } from 'socket.io-client'
 import {
-  generateKeyPair,
+  loadKeyPair,
   exportPublicKey,
   deriveSharedKey,
   encrypt,
@@ -10,13 +10,16 @@ import {
   b64decode,
 } from './crypto.js'
 
-// Per-tab identity: survives reloads, but two tabs are two distinct users
-// (localStorage would make same-browser tabs shadow each other on the relay).
+// Persistent identity: same id + same keys across restarts, so history stays
+// readable and friends see one "you" (two tabs in one browser share it).
 export function getClientId() {
-  let id = sessionStorage.getItem('sable-id')
+  // ?u=alice forces a separate identity — lets one browser act as two users
+  const forced = new URLSearchParams(location.search).get('u')
+  if (forced) return `u-${forced}`
+  let id = localStorage.getItem('sable-id')
   if (!id) {
     id = crypto.randomUUID()
-    sessionStorage.setItem('sable-id', id)
+    localStorage.setItem('sable-id', id)
   }
   return id
 }
@@ -25,6 +28,7 @@ const emptyConvo = () => ({ messages: [], unread: 0, typing: null, lastTs: 0 })
 
 // Content envelopes (encrypted as JSON): text / file / loc (+fwd flag)
 // Control envelopes: { t: 'react', msgId, emoji|null } and { t: 'delete', msgId }
+// Self-copies carry _to so restored sent messages land in the right thread.
 // Local-only kinds: 'call' (call logs) and 'sys' (group notices)
 const toBody = (env) => {
   if (env.t === 'file') {
@@ -35,15 +39,16 @@ const toBody = (env) => {
 }
 
 export function useChat(name) {
-  const [contacts, setContacts] = useState([]) // online users, excluding self
-  const [groups, setGroups] = useState([]) // [{ id, name, owner, members: [{id,name}] }]
-  const [convos, setConvos] = useState({}) // (peerId | groupId) -> convo
+  const [contacts, setContacts] = useState([]) // [{ id, name, online, lastSeen }]
+  const [groups, setGroups] = useState([])
+  const [convos, setConvos] = useState({})
   const [safetyCode, setSafetyCode] = useState('')
   const [connected, setConnected] = useState(false)
 
   const socketRef = useRef(null)
-  const keysRef = useRef(new Map()) // peerId -> Promise<CryptoKey>
-  const pubkeysRef = useRef(new Map())
+  const keyCache = useRef(new Map()) // JSON(jwk) -> Promise<CryptoKey>
+  const peerKeyRef = useRef(new Map()) // peerId -> Promise<CryptoKey> (their latest key)
+  const selfKeyRef = useRef(null) // Promise<CryptoKey> for own history copies
   const typingTimers = useRef(new Map())
   const clientId = getClientId()
 
@@ -74,13 +79,12 @@ export function useChat(name) {
     )
   }
 
-  // apply a decrypted envelope; returns true if it was a control message
-  const applyControl = (key, from, env) => {
+  const applyControl = (key, reactor, env) => {
     if (env?.t === 'react') {
       updateMessage(key, env.msgId, (m) => {
         const reactions = { ...m.reactions }
-        if (env.emoji) reactions[from] = env.emoji
-        else delete reactions[from]
+        if (env.emoji) reactions[reactor] = env.emoji
+        else delete reactions[reactor]
         return { ...m, reactions }
       })
       return true
@@ -94,35 +98,102 @@ export function useChat(name) {
 
   useEffect(() => {
     let alive = true
-    // same-origin by default (vite proxies /socket.io in dev); a hosted
-    // frontend points at its relay via VITE_RELAY_URL
     const socket = import.meta.env.VITE_RELAY_URL ? io(import.meta.env.VITE_RELAY_URL) : io()
     socketRef.current = socket
 
-    const setup = async () => {
-      const keyPair = await generateKeyPair()
+    // Listeners must attach synchronously: the socket starts connecting the
+    // moment io() returns, and events that land while keys load in IndexedDB
+    // would otherwise be lost (missed hello, stale presence).
+    const ready = (async () => {
+      const keyPair = await loadKeyPair()
       const pubKey = await exportPublicKey(keyPair)
-      if (!alive) return
-      setSafetyCode(await fingerprint(pubKey))
+      selfKeyRef.current = deriveSharedKey(keyPair.privateKey, pubKey)
+      fingerprint(pubKey).then((code) => alive && setSafetyCode(code))
+      const keyFor = (jwk) => {
+        const id = JSON.stringify(jwk)
+        if (!keyCache.current.has(id)) {
+          keyCache.current.set(id, deriveSharedKey(keyPair.privateKey, jwk))
+        }
+        return keyCache.current.get(id)
+      }
+      return { pubKey, keyFor }
+    })()
 
-      socket.on('connect', () => {
+    const setup = () => {
+      socket.on('connect', async () => {
+        const { pubKey } = await ready
         if (!alive) return
         setConnected(true)
         socket.emit('hello', { id: clientId, name, pubKey })
       })
       socket.on('disconnect', () => alive && setConnected(false))
 
-      socket.on('directory', (list) => {
+      socket.on('directory', async (list) => {
+        const { keyFor } = await ready
         if (!alive) return
         const peers = list.filter((u) => u.id !== clientId)
-        for (const peer of peers) {
-          const jwkStr = JSON.stringify(peer.pubKey)
-          if (pubkeysRef.current.get(peer.id) !== jwkStr) {
-            pubkeysRef.current.set(peer.id, jwkStr)
-            keysRef.current.set(peer.id, deriveSharedKey(keyPair.privateKey, peer.pubKey))
+        for (const peer of peers) peerKeyRef.current.set(peer.id, keyFor(peer.pubKey))
+        setContacts(peers.map(({ id, name: n, online, lastSeen }) => ({ id, name: n, online, lastSeen })))
+      })
+
+      // ciphertext history: decrypt and replay in order
+      socket.on('backlog', async (rows) => {
+        const { keyFor } = await ready
+        const restored = {} // convoKey -> convo
+        const convoOf = (key) => (restored[key] ??= emptyConvo())
+        for (const row of rows) {
+          let env
+          try {
+            const key = row.from === clientId ? await selfKeyRef.current : await keyFor(row.senderPub)
+            env = JSON.parse(await decrypt(key, row.payload))
+          } catch {
+            continue // rotated keys or corrupt row — skip silently
           }
+          const convoKey = row.groupId ?? (row.from === clientId ? env._to : row.from)
+          if (!convoKey) continue
+          const convo = convoOf(convoKey)
+          if (env.t === 'react') {
+            const reactor = row.from === clientId ? 'me' : row.from
+            convo.messages = convo.messages.map((m) =>
+              m.id === env.msgId
+                ? { ...m, reactions: env.emoji ? { ...m.reactions, [reactor]: env.emoji } : (() => { const r = { ...m.reactions }; delete r[reactor]; return r })() }
+                : m
+            )
+            continue
+          }
+          if (env.t === 'delete') {
+            convo.messages = convo.messages.map((m) => (m.id === env.msgId ? { ...m, deleted: true, reactions: {} } : m))
+            continue
+          }
+          convo.messages.push({
+            id: row.id,
+            kind: row.from === clientId ? 'self' : 'peer',
+            from: row.from,
+            name: row.fromName,
+            body: toBody(env),
+            ts: row.ts,
+            status: row.from === clientId ? 'sent' : undefined,
+          })
+          convo.lastTs = Math.max(convo.lastTs, row.ts)
         }
-        setContacts(peers.map(({ id, name: n }) => ({ id, name: n })))
+        if (!alive) return
+        setConvos((current) => {
+          // history loads once per connect; live messages that raced ahead win
+          const merged = { ...restored }
+          for (const [k, v] of Object.entries(current)) {
+            if (!merged[k]) merged[k] = v
+            else {
+              const seen = new Set(merged[k].messages.map((m) => m.id))
+              merged[k] = {
+                ...merged[k],
+                messages: [...merged[k].messages, ...v.messages.filter((m) => !seen.has(m.id))],
+                unread: v.unread,
+                lastTs: Math.max(merged[k].lastTs, v.lastTs),
+              }
+            }
+          }
+          return merged
+        })
       })
 
       // ----- groups -----
@@ -145,7 +216,7 @@ export function useChat(name) {
       })
 
       const onMessage = async ({ key, from, fromName, msgId, payload, ts, group }) => {
-        const keyPromise = keysRef.current.get(from)
+        const keyPromise = peerKeyRef.current.get(from)
         if (!keyPromise) return
         let env
         try {
@@ -186,9 +257,7 @@ export function useChat(name) {
     }
   }, [name]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // encrypt an envelope for one peer
-  const sealFor = async (peerId, env) => {
-    const keyPromise = keysRef.current.get(peerId)
+  const sealWith = async (keyPromise, env) => {
     if (!keyPromise) return null
     return encrypt(await keyPromise, JSON.stringify(env))
   }
@@ -196,7 +265,6 @@ export function useChat(name) {
   const groupsRef = useRef(groups)
   groupsRef.current = groups
 
-  // target: peerId or groupId. Encrypts per recipient; groups fan out pairwise.
   const sendEnvelope = useCallback(async (target, env, { localEntry = true } = {}) => {
     const socket = socketRef.current
     if (!socket) return
@@ -207,15 +275,18 @@ export function useChat(name) {
     if (group) {
       const payloads = {}
       for (const m of group.members) {
-        if (m.id === clientId) continue
-        const sealed = await sealFor(m.id, env)
+        const sealed = await sealWith(
+          m.id === clientId ? selfKeyRef.current : peerKeyRef.current.get(m.id),
+          env
+        )
         if (sealed) payloads[m.id] = sealed
       }
       socket.emit('gdm', { groupId: target, id: msgId, payloads, ts })
     } else {
-      const sealed = await sealFor(target, env)
+      const sealed = await sealWith(peerKeyRef.current.get(target), env)
       if (!sealed) return
-      socket.emit('dm', { to: target, id: msgId, payload: sealed, ts })
+      const selfPayload = await sealWith(selfKeyRef.current, { ...env, _to: target })
+      socket.emit('dm', { to: target, id: msgId, payload: sealed, selfPayload, ts })
     }
 
     if (localEntry) {

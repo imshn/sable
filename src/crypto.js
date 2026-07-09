@@ -22,6 +22,37 @@ export async function generateKeyPair() {
   return crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveKey'])
 }
 
+// Persistent identity keys: CryptoKey objects survive in IndexedDB while
+// staying non-extractable — history stays decryptable across restarts.
+const openKeyStore = () =>
+  new Promise((resolve, reject) => {
+    const req = indexedDB.open('sable-crypto', 1)
+    req.onupgradeneeded = () => req.result.createObjectStore('keys')
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error)
+  })
+
+export async function loadKeyPair() {
+  try {
+    const dbi = await openKeyStore()
+    const existing = await new Promise((resolve, reject) => {
+      const t = dbi.transaction('keys').objectStore('keys').get('ecdh')
+      t.onsuccess = () => resolve(t.result)
+      t.onerror = () => reject(t.error)
+    })
+    if (existing?.privateKey) return existing
+    const pair = await generateKeyPair()
+    await new Promise((resolve, reject) => {
+      const t = dbi.transaction('keys', 'readwrite').objectStore('keys').put(pair, 'ecdh')
+      t.onsuccess = resolve
+      t.onerror = () => reject(t.error)
+    })
+    return pair
+  } catch {
+    return generateKeyPair() // private browsing etc: session-only keys
+  }
+}
+
 export async function exportPublicKey(keyPair) {
   return crypto.subtle.exportKey('jwk', keyPair.publicKey)
 }

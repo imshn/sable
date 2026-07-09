@@ -1,0 +1,12 @@
+name: keep relay awake
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ping relay healthz
+        run: curl -sf --max-time 20 https://sable-relay-qcla.onrender.com/healthz

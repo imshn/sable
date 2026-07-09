@@ -37,8 +37,8 @@ function Welcome({ onEnter }) {
             <span>Generated in your browser, non-extractable</span>
           </li>
           <li>
-            <strong>Nothing stored</strong>
-            <span>The relay routes ciphertext and forgets it; calls go peer-to-peer</span>
+            <strong>The server reads nothing</strong>
+            <span>History is stored as ciphertext only; calls go peer-to-peer</span>
           </li>
         </ul>
       </section>
@@ -140,8 +140,10 @@ function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, safetyCod
                       `${last.kind === 'self' ? 'You: ' : ''}${previewText(last, r.name)}`
                     ) : r.isGroup ? (
                       `${r.memberCount} members`
-                    ) : (
+                    ) : r.online ? (
                       'online'
+                    ) : (
+                      'offline'
                     )}
                   </span>
                   {convo?.unread > 0 && <span className="unread">{convo.unread}</span>}
@@ -591,7 +593,7 @@ function Shell({ name, onSignOut }) {
         mine: activeGroup.owner === clientId,
       }
     : activeContact
-      ? { ...activeContact, online: true, isGroup: false }
+      ? { ...activeContact, isGroup: false }
       : activeId && lastPeer?.id === activeId
         ? { ...lastPeer, online: false, isGroup: false }
         : null
@@ -719,7 +721,7 @@ function Shell({ name, onSignOut }) {
           inviteCandidates={
             call.groupId
               ? (groups.find((g) => g.id === call.groupId)?.members ?? []).filter(
-                  (m) => m.id !== clientId && !remoteStreams[m.id] && contacts.some((c) => c.id === m.id)
+                  (m) => m.id !== clientId && !remoteStreams[m.id] && contacts.some((c) => c.id === m.id && c.online)
                 )
               : []
           }
