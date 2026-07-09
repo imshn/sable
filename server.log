@@ -1,0 +1,7 @@
+
+> server
+> node --env-file=.env.local server/index.js
+
+turso: migrated
+restored 2 users, 1 groups
+sable relay listening on :3001

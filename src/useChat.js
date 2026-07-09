@@ -31,20 +31,22 @@ const toBody = (env) => {
   return env
 }
 
-export function useChat(name) {
-  const [contacts, setContacts] = useState([]) // [{ id, name, online, lastSeen }]
+export function useChat(name, username) {
+  const [contacts, setContacts] = useState([]) // [{ id, name, username, avatar, online, lastSeen, status, isRequester }]
   const [groups, setGroups] = useState([])
   const [convos, setConvos] = useState({})
   const [safetyCode, setSafetyCode] = useState('')
   const [connected, setConnected] = useState(false)
   const [sessionReplaced, setSessionReplaced] = useState(false)
+  const [authError, setAuthError] = useState(null)
 
   const socketRef = useRef(null)
   const keyCache = useRef(new Map()) // JSON(jwk) -> Promise<CryptoKey>
   const peerKeyRef = useRef(new Map()) // peerId -> Promise<CryptoKey> (their latest key)
   const selfKeyRef = useRef(null) // Promise<CryptoKey> for own history copies
   const typingTimers = useRef(new Map())
-  const clientId = getClientId(name)
+  // Use username as the primary identity key if available, otherwise name
+  const clientId = getClientId(username || name)
 
   const patchConvo = (key, fn) =>
     setConvos((c) => ({ ...c, [key]: fn(c[key] ?? emptyConvo()) }))
@@ -119,9 +121,16 @@ export function useChat(name) {
         const { pubKey } = await ready
         if (!alive) return
         setConnected(true)
-        socket.emit('hello', { id: clientId, name, pubKey })
+        setAuthError(null)
+        socket.emit('hello', { id: clientId, name, username, pubKey })
       })
       socket.on('disconnect', () => alive && setConnected(false))
+
+      socket.on('auth-error', (err) => {
+        if (!alive) return
+        setAuthError(err)
+        socket.disconnect()
+      })
 
       socket.on('session-replaced', () => {
         if (!alive) return
@@ -129,12 +138,46 @@ export function useChat(name) {
         setSessionReplaced(true)
       })
 
-      socket.on('directory', async (list) => {
+      const parseContacts = (list) => {
+        return list.map(c => {
+          const isRequester = c.requester_id === clientId;
+          return {
+            id: isRequester ? c.recipient_id : c.requester_id,
+            name: isRequester ? c.recipient_name : c.requester_name,
+            username: isRequester ? c.recipient_username : c.requester_username,
+            avatar: isRequester ? c.recipient_avatar : c.requester_avatar,
+            pubKey: JSON.parse(isRequester ? c.recipient_pubkey : c.requester_pubkey),
+            status: c.status,
+            isRequester,
+            lastSeen: isRequester ? c.recipient_last_seen : c.requester_last_seen,
+            online: c.online || false,
+          }
+        })
+      }
+
+      socket.on('contacts', async (list) => {
         const { keyFor } = await ready
         if (!alive) return
-        const peers = list.filter((u) => u.id !== clientId)
+        const peers = parseContacts(list)
         for (const peer of peers) peerKeyRef.current.set(peer.id, keyFor(peer.pubKey))
-        setContacts(peers.map(({ id, name: n, online, lastSeen }) => ({ id, name: n, online, lastSeen })))
+        setContacts(peers)
+      })
+
+      socket.on('contact-updated', async (list) => {
+        const { keyFor } = await ready
+        if (!alive) return
+        const peers = parseContacts(list)
+        for (const peer of peers) {
+          if (!peerKeyRef.current.has(peer.id)) {
+            peerKeyRef.current.set(peer.id, keyFor(peer.pubKey))
+          }
+        }
+        setContacts(peers)
+      })
+
+      socket.on('presence', ({ id, online, lastSeen }) => {
+        if (!alive) return
+        setContacts((prev) => prev.map(c => c.id === id ? { ...c, online, lastSeen } : c))
       })
 
       // ciphertext history: decrypt and replay in order
@@ -352,10 +395,27 @@ export function useChat(name) {
     setConvos((c) => (c[target]?.unread ? { ...c, [target]: { ...c[target], unread: 0 } } : c))
   }, [])
 
+  const sendContactRequest = useCallback((to) => {
+    socketRef.current?.emit('contact-request', { to })
+  }, [])
+
+  const acceptContactRequest = useCallback((to) => {
+    socketRef.current?.emit('contact-accept', { to })
+  }, [])
+
+  const rejectContactRequest = useCallback((to) => {
+    socketRef.current?.emit('contact-reject', { to })
+  }, [])
+
+  const removeContact = useCallback((to) => {
+    socketRef.current?.emit('contact-remove', { to })
+  }, [])
+
   return {
-    clientId, contacts, groups, convos, safetyCode, connected, sessionReplaced,
+    clientId, contacts, groups, convos, safetyCode, connected, sessionReplaced, authError,
     send, react, deleteForAll, deleteForMe, addLocalEntry,
     createGroup, deleteGroup, leaveGroup, inviteToGroup,
+    sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact,
     notifyTyping, markRead, socketRef,
   }
 }

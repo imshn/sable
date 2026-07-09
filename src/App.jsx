@@ -3,6 +3,8 @@ import { useChat } from './useChat.js'
 import { useCall } from './useCall.js'
 import { Icon } from './icons.jsx'
 import { Thread, callLogText, Linkified } from './Thread.jsx'
+import { ContactsPage } from './ContactsPage.jsx'
+import { InvitePage } from './InvitePage.jsx'
 
 function useTheme() {
   const [theme, setTheme] = useState(() => localStorage.getItem('sable-theme') ?? 'dark')
@@ -29,13 +31,16 @@ function ThemeToggle({ className }) {
 
 function Welcome({ onEnter }) {
   const [name, setName] = useState(localStorage.getItem('sable-name') ?? '')
+  const [username, setUsername] = useState(localStorage.getItem('sable-username') ?? '')
 
   const submit = (e) => {
     e.preventDefault()
-    const trimmed = name.trim()
-    if (!trimmed) return
-    localStorage.setItem('sable-name', trimmed)
-    onEnter(trimmed)
+    const trimmedName = name.trim()
+    const trimmedUsername = username.trim().toLowerCase()
+    if (!trimmedName || !trimmedUsername) return
+    localStorage.setItem('sable-name', trimmedName)
+    localStorage.setItem('sable-username', trimmedUsername)
+    onEnter({ name: trimmedName, username: trimmedUsername })
   }
 
   return (
@@ -70,7 +75,18 @@ function Welcome({ onEnter }) {
       <section className="lobby-panel">
         <form onSubmit={submit}>
           <h2>Who are you?</h2>
-          <label htmlFor="name">Your name</label>
+          <label htmlFor="username">Username (Unique)</label>
+          <input
+            id="username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value.replace(/[^a-zA-Z0-9_.]/g, ''))}
+            placeholder="e.g. johndoe"
+            maxLength={32}
+            autoComplete="off"
+            autoFocus
+          />
+          
+          <label htmlFor="name" style={{ marginTop: '1rem' }}>Display Name</label>
           <input
             id="name"
             value={name}
@@ -78,10 +94,9 @@ function Welcome({ onEnter }) {
             placeholder="How others will see you"
             maxLength={32}
             autoComplete="off"
-            autoFocus
           />
-          <p className="hint">Anyone online can find you by name and start an encrypted chat.</p>
-          <button type="submit" className="primary" disabled={!name.trim()}>
+          <p className="hint">Anyone can find you by your username to send a contact request.</p>
+          <button type="submit" className="primary" disabled={!name.trim() || !username.trim()}>
             Enter Sable
             <span className="btn-icon">{Icon.send}</span>
           </button>
@@ -124,7 +139,7 @@ function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, safetyCod
           <span className={`status-dot ${connected ? 'on' : ''}`} aria-hidden="true" />
           {name}
           <ThemeToggle />
-          <button className="icon-btn subtle" aria-label="New group" title="New group" onClick={onNewGroup}>
+          <button className="icon-btn subtle" aria-label="Contacts" title="Contacts" onClick={() => onSelect('contacts')}>
             {Icon.users}
           </button>
           <button className="icon-btn subtle" aria-label="Sign out" onClick={onSignOut}>
@@ -250,7 +265,7 @@ function NewGroupModal({ contacts, onCreate, onClose }) {
 // window (~5s) lapses, which is how long ICE can take — the classic "call
 // connected but screen stays black". Fall back to muted playback + unmute pill.
 // When the video track goes dark (camera off), show the person instead of a void.
-function Video({ stream, muted, className, allowUnmute, label, personName, forceAvatar }) {
+function Video({ stream, muted, className, allowUnmute, label, personName, forceAvatar, isMicOff }) {
   const ref = useRef(null)
   const [blocked, setBlocked] = useState(false)
   const [videoDark, setVideoDark] = useState(false)
@@ -295,6 +310,11 @@ function Video({ stream, muted, className, allowUnmute, label, personName, force
         <div className="video-avatar">
           <span className="avatar big-tile">{initials(personName)}</span>
           <span className="video-avatar-name">{personName}</span>
+        </div>
+      )}
+      {isMicOff && (
+        <div className="video-mic-muted" title="Microphone off">
+          {Icon.micOff}
         </div>
       )}
       {label && !showAvatar && <span className="video-label">{label}</span>}
@@ -381,7 +401,7 @@ function QualityPill({ quality }) {
 }
 
 function CallOverlay({
-  call, title, names, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, quality, lowBandwidth,
+  call, title, names, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, micsOff, quality, lowBandwidth,
   onToggleMic, onToggleCam, onToggleShare, onHangup, inviteCandidates, onInvite,
   convo, onSendChat, onReadChat,
 }) {
@@ -416,53 +436,58 @@ function CallOverlay({
   return (
     <div className="call-overlay" role="dialog" aria-label={`Call with ${title}`}>
       <div className={`call-stage ${chatOpen ? 'with-chat' : ''}`}>
-        <div className="call-main">
-          {presenting && stageStream ? (
-            <>
-              <Video
-                stream={stageStream}
-                muted={sharing}
-                className="stage-video"
-                allowUnmute={!sharing}
-                label={sharing ? 'You are presenting' : `${names(remoteSharer)} is presenting`}
-                personName={sharing ? 'You' : names(remoteSharer)}
-              />
-              <div className="filmstrip">
-                {stripRemotes.map(([peerId, stream]) => (
-                  <Video key={peerId} stream={stream} className="strip-tile" label={names(peerId)} personName={names(peerId)} forceAvatar={!!camsOff[peerId]} />
-                ))}
-                {!sharing && <Video stream={localStream} muted className="strip-tile" label="you" personName="You" forceAvatar={!camOn} />}
-              </div>
-            </>
-          ) : remotes.length === 0 ? (
-            <div className="call-waiting">
-              <span className="avatar big">{call.mode === 'group' ? Icon.users : initials(title)}</span>
-              <p>{call.status === 'outgoing' ? `Calling ${title}…` : call.mode === 'group' ? 'Waiting for others to join…' : 'Connecting…'}</p>
-            </div>
-          ) : (
-            <div className={`remote-grid n${Math.min(remotes.length, 4)}`}>
-              {remotes.map(([peerId, stream]) => (
-                <Video key={peerId} stream={stream} className="remote-video" allowUnmute label={names(peerId)} personName={names(peerId)} forceAvatar={!!camsOff[peerId]} />
-              ))}
-            </div>
-          )}
-          {!presenting && <Video stream={localStream} muted className="local-video" personName="You" forceAvatar={!camOn} />}
+        <div className="call-main" style={{ display: 'flex', flexDirection: 'column' }}>
           <div className="call-topbar">
             <span className="safety-icon">{Icon.lock}</span>
             {title}
             <span className="call-note">{sharing ? 'sharing your screen' : 'peer-to-peer, encrypted'}</span>
             <QualityPill quality={quality} />
           </div>
-          {lowBandwidth && (
-            <div className="chat-toast bw-toast">
-              Poor connection — video paused, audio continues. Tap the camera to turn it back on.
-            </div>
-          )}
-          {toast && !chatOpen && (
-            <button className="chat-toast" onClick={() => { setChatOpen(true); setToast(null) }}>
-              <strong>{toast.name}</strong> {toast.text}
-            </button>
-          )}
+
+          <div className="call-content" style={{ flex: 1, position: 'relative', overflow: 'hidden', minHeight: 0 }}>
+            {presenting && stageStream ? (
+              <>
+                <Video
+                  stream={stageStream}
+                  muted={sharing}
+                  className="stage-video"
+                  allowUnmute={!sharing}
+                  label={sharing ? 'You are presenting' : `${names(remoteSharer)} is presenting`}
+                  personName={sharing ? 'You' : names(remoteSharer)}
+                />
+                <div className="filmstrip">
+                  {stripRemotes.map(([peerId, stream]) => (
+                    <Video key={peerId} stream={stream} className="strip-tile" label={names(peerId)} personName={names(peerId)} forceAvatar={!!camsOff[peerId]} isMicOff={!!micsOff[peerId]} />
+                  ))}
+                  {!sharing && <Video stream={localStream} muted className="strip-tile" label="you" personName="You" forceAvatar={!camOn} />}
+                </div>
+              </>
+            ) : remotes.length === 0 ? (
+              <div className="call-waiting">
+                <span className="avatar big">{call.mode === 'group' ? Icon.users : initials(title)}</span>
+                <p>{call.status === 'outgoing' ? `Calling ${title}…` : call.mode === 'group' ? 'Waiting for others to join…' : 'Connecting…'}</p>
+              </div>
+            ) : (
+              <div className={`remote-grid n${Math.min(remotes.length, 4)}`}>
+                {remotes.map(([peerId, stream]) => (
+                  <Video key={peerId} stream={stream} className="remote-video" allowUnmute label={names(peerId)} personName={names(peerId)} forceAvatar={!!camsOff[peerId]} isMicOff={!!micsOff[peerId]} />
+                ))}
+              </div>
+            )}
+            {!presenting && <Video stream={localStream} muted className="local-video" personName="You" forceAvatar={!camOn} />}
+            
+            {lowBandwidth && (
+              <div className="chat-toast bw-toast">
+                Poor connection — video paused, audio continues. Tap the camera to turn it back on.
+              </div>
+            )}
+            {toast && !chatOpen && (
+              <button className="chat-toast" style={{ bottom: '16px' }} onClick={() => { setChatOpen(true); setToast(null) }}>
+                <strong>{toast.name}</strong> {toast.text}
+              </button>
+            )}
+          </div>
+
           <div className="call-controls">
             <button className={`call-btn ${micOn ? '' : 'off'}`} aria-label={micOn ? 'Mute microphone' : 'Unmute microphone'} onClick={onToggleMic}>
               {micOn ? Icon.mic : Icon.micOff}
@@ -500,7 +525,7 @@ function CallOverlay({
                   {Icon.userPlus}
                 </button>
                 {inviteOpen && (
-                  <div className="drawer invite-drawer" role="menu">
+                  <div className="drawer invite-drawer" role="menu" style={{ bottom: 'calc(100% + 14px)' }}>
                     {inviteCandidates.map((m) => (
                       <button
                         key={m.id}
@@ -627,65 +652,52 @@ function ForwardPicker({ rows, excludeId, onPick, onClose }) {
   )
 }
 
-function Shell({ name, onSignOut }) {
+function Shell({ name, username, onSignOut }) {
+  const [activeId, setActiveId] = useState('contacts')
+  const [creatingGroup, setCreatingGroup] = useState(false)
+  const [addingTo, setAddingTo] = useState(null)
+  const [forwarding, setForwarding] = useState(null)
+  const [inviteCode, setInviteCode] = useState(() => {
+    const path = window.location.pathname
+    if (path.startsWith('/invite/')) return path.split('/')[2]
+    return null
+  })
+  const chat = useChat(name, username)
   const {
-    clientId, contacts, groups, convos, safetyCode, connected, sessionReplaced,
+    clientId, contacts, groups, convos, connected, safetyCode, sessionReplaced, authError,
     send, react, deleteForAll, deleteForMe, addLocalEntry,
     createGroup, deleteGroup, leaveGroup, inviteToGroup,
-    notifyTyping, markRead, socketRef,
-  } = useChat(name)
+    sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact,
+    notifyTyping, markRead, socketRef
+  } = chat
+
+  useEffect(() => {
+    if (authError) {
+      alert(authError)
+      onSignOut()
+    }
+  }, [authError, onSignOut])
   const {
-    call, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, quality, lowBandwidth,
+    call, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, micsOff, quality, lowBandwidth,
     startCall, startGroupCall, accept, decline, hangup, toggleMic, toggleCam, toggleShare, inviteToCall,
   } = useCall(socketRef, clientId, (target, log) => addLocalEntry(target, { t: 'call', ...log }))
-  const [activeId, setActiveId] = useState(null)
-  const [forwarding, setForwarding] = useState(null)
-  const [groupModal, setGroupModal] = useState(false)
-  const [addingTo, setAddingTo] = useState(null) // groupId being extended
+
+  const [inviting, setInviting] = useState(false)
 
   // merged sidebar rows: groups + contacts, most recent first
-  const rows = [
-    ...groups.map((g) => ({ id: g.id, name: g.name, isGroup: true, memberCount: g.members.length })),
-    ...contacts.map((c) => ({ id: c.id, name: c.name, isGroup: false })),
-  ].sort((a, b) => (convos[b.id]?.lastTs ?? 0) - (convos[a.id]?.lastTs ?? 0) || a.name.localeCompare(b.name))
+  const sidebarRows = [
+    ...groups.map((g) => ({ ...g, isGroup: true, memberCount: g.members.length })),
+    ...contacts.filter(c => c.status === 'accepted'),
+  ].sort((a, b) => {
+    const tsA = Math.max(convos[a.id]?.lastTs || 0, a.lastSeen || 0)
+    const tsB = Math.max(convos[b.id]?.lastTs || 0, b.lastSeen || 0)
+    return tsB - tsA
+  })
 
   // resolve the open thread target (direct contact or group)
   const activeContact = contacts.find((c) => c.id === activeId)
   const activeGroup = groups.find((g) => g.id === activeId)
-  const [lastPeer, setLastPeer] = useState(null)
-  useEffect(() => {
-    if (activeContact) setLastPeer(activeContact)
-  }, [activeContact])
-
-  const target = activeGroup
-    ? {
-        id: activeGroup.id,
-        name: activeGroup.name,
-        online: true,
-        isGroup: true,
-        members: activeGroup.members,
-        mine: activeGroup.owner === clientId,
-      }
-    : activeContact
-      ? { ...activeContact, isGroup: false }
-      : activeId && lastPeer?.id === activeId
-        ? { ...lastPeer, online: false, isGroup: false }
-        : null
-
-  const activeConvo = activeId ? convos[activeId] : null
-  // the thread behind an active call overlay isn't visible — let the in-call
-  // chat panel (onReadChat) own read-marking during calls
-  const inCall = call.status !== 'idle'
-  useEffect(() => {
-    if (activeId && activeConvo?.unread && !inCall) markRead(activeId)
-  }, [activeId, activeConvo, markRead, inCall])
-
-  const nameOf = (id) =>
-    contacts.find((c) => c.id === id)?.name ??
-    groups.flatMap((g) => g.members).find((m) => m.id === id)?.name ??
-    'Unknown'
-
-  const callTitle = call.groupId ? groups.find((g) => g.id === call.groupId)?.name ?? 'Group call' : nameOf(call.peerId)
+  const activePeerName = activeGroup ? activeGroup.name : activeContact?.name
 
   const forward = async (targetId, msg) => {
     const body = msg.body
@@ -723,52 +735,111 @@ function Shell({ name, onSignOut }) {
     <div className={`shell ${activeId ? 'thread-open' : ''}`}>
       <Sidebar
         name={name}
-        rows={rows}
+        rows={sidebarRows}
         convos={convos}
         activeId={activeId}
         onSelect={setActiveId}
-        onNewGroup={() => setGroupModal(true)}
+        onNewGroup={() => setCreatingGroup(true)}
         safetyCode={safetyCode}
         connected={connected}
         onSignOut={onSignOut}
       />
-      {target ? (
-        <Thread
-          key={target.id}
-          target={target}
-          convo={activeConvo}
-          clientId={clientId}
-          onBack={() => setActiveId(null)}
-          onSend={(env) => send(target.id, env)}
-          onTyping={() => notifyTyping(target.id)}
-          onStartCall={() => (target.isGroup ? startGroupCall(target.id) : startCall(target.id))}
-          callBusy={call.status !== 'idle'}
-          onReact={(msgId, emoji) => react(target.id, msgId, emoji)}
-          onDeleteMe={(msgId) => deleteForMe(target.id, msgId)}
-          onDeleteAll={(msgId) => deleteForAll(target.id, msgId)}
-          onForward={(msg) => setForwarding(msg)}
-          onLeaveGroup={() => { leaveGroup(target.id); setActiveId(null) }}
-          onDeleteGroup={() => { deleteGroup(target.id); setActiveId(null) }}
-          onAddMembers={() => setAddingTo(target.id)}
-        />
-      ) : (
-        <section className="thread placeholder">
-          <div className="empty">
-            <div className="empty-glyph">{Icon.lock}</div>
-            <p>Select a chat.</p>
-            <p className="empty-sub">Every conversation gets its own encryption keys.</p>
-          </div>
-        </section>
-      )}
+      <main className="call-stage with-chat">
+        {inviteCode ? (
+          <InvitePage 
+            code={inviteCode} 
+            socketRef={socketRef} 
+            onJoin={(userId) => {
+              sendContactRequest(userId)
+              setInviteCode(null)
+              window.history.pushState({}, '', '/')
+            }}
+            onCancel={() => {
+              setInviteCode(null)
+              window.history.pushState({}, '', '/')
+            }}
+          />
+        ) : call.status !== 'idle' ? (
+          <CallOverlay
+            call={call}
+            title={call.groupId ? groups.find(g => g.id === call.groupId)?.name : contacts.find(c => c.id === call.peerId)?.name}
+            names={(id) => contacts.find((c) => c.id === id)?.name ?? groups.flatMap((g) => g.members).find((m) => m.id === id)?.name ?? 'Unknown'}
+            localStream={localStream}
+            remoteStreams={remoteStreams}
+            micOn={micOn}
+            camOn={camOn}
+            sharing={sharing}
+            sharers={sharers}
+            camsOff={camsOff}
+            micsOff={micsOff}
+            quality={quality}
+            lowBandwidth={lowBandwidth}
+            onToggleMic={toggleMic}
+            onToggleCam={toggleCam}
+            onToggleShare={toggleShare}
+            onHangup={hangup}
+            convo={convos[call.groupId ?? call.peerId]}
+            onSendChat={(text) => send(call.groupId ?? call.peerId, { t: 'text', text })}
+            onReadChat={() => markRead(call.groupId ?? call.peerId)}
+            inviteCandidates={
+              call.groupId
+                ? (groups.find((g) => g.id === call.groupId)?.members ?? []).filter(
+                    (m) => m.id !== clientId && !remoteStreams[m.id] && contacts.some((c) => c.id === m.id && c.online)
+                  )
+                : []
+            }
+            onInvite={inviteToCall}
+          />
+        ) : activeId === 'contacts' ? (
+          <ContactsPage 
+            contacts={contacts} 
+            onChat={(id) => setActiveId(id)}
+            onVoiceCall={(id) => startCall(id, false)}
+            onVideoCall={(id) => startCall(id, true)}
+            sendContactRequest={sendContactRequest}
+            acceptContactRequest={acceptContactRequest}
+            rejectContactRequest={rejectContactRequest}
+            removeContact={removeContact}
+            socketRef={socketRef}
+          />
+        ) : activeId ? (
+          <Thread
+            key={activeId}
+            target={activeGroup ? { ...activeGroup, isGroup: true } : { ...activeContact, isGroup: false }}
+            convo={convos[activeId]}
+            clientId={clientId}
+            onBack={() => setActiveId(null)}
+            onSend={(env) => send(activeId, env)}
+            onTyping={() => notifyTyping(activeId)}
+            onStartCall={() => (activeGroup ? startGroupCall(activeId) : startCall(activeId))}
+            callBusy={call.status !== 'idle'}
+            onReact={(msgId, emoji) => react(activeId, msgId, emoji)}
+            onDeleteMe={(msgId) => deleteForMe(activeId, msgId)}
+            onDeleteAll={(msgId) => deleteForAll(activeId, msgId)}
+            onForward={(msg) => setForwarding(msg)}
+            onLeaveGroup={() => { leaveGroup(activeId); setActiveId(null) }}
+            onDeleteGroup={() => { deleteGroup(activeId); setActiveId(null) }}
+            onAddMembers={() => setAddingTo(activeId)}
+          />
+        ) : (
+          <section className="thread placeholder">
+            <div className="empty">
+              <div className="empty-glyph">{Icon.lock}</div>
+              <p>Select a chat.</p>
+              <p className="empty-sub">Every conversation gets its own encryption keys.</p>
+            </div>
+          </section>
+        )}
+      </main>
 
-      {groupModal && (
-        <NewGroupModal contacts={contacts} onCreate={createGroup} onClose={() => setGroupModal(false)} />
+      {creatingGroup && (
+        <NewGroupModal contacts={contacts.filter(c => c.status === 'accepted')} onCreate={createGroup} onClose={() => setCreatingGroup(false)} />
       )}
       {addingTo && (
         <MemberPicker
           title="Add members"
           contacts={contacts.filter(
-            (c) => !groups.find((g) => g.id === addingTo)?.members.some((m) => m.id === c.id)
+            (c) => c.status === 'accepted' && !groups.find((g) => g.id === addingTo)?.members.some((m) => m.id === c.id)
           )}
           onPick={(ids) => inviteToGroup(addingTo, ids)}
           onClose={() => setAddingTo(null)}
@@ -776,15 +847,15 @@ function Shell({ name, onSignOut }) {
       )}
       {forwarding && (
         <ForwardPicker
-          rows={rows}
-          excludeId={target?.id}
+          rows={sidebarRows}
+          excludeId={activeId}
           onPick={(targetId) => forward(targetId, forwarding)}
           onClose={() => setForwarding(null)}
         />
       )}
       {call.status === 'incoming' && (
         <IncomingCall
-          title={callTitle}
+          title={call.groupId ? groups.find((g) => g.id === call.groupId)?.name ?? 'Group call' : contacts.find((c) => c.id === call.peerId)?.name ?? 'Unknown'}
           subtitle={call.mode === 'group' ? `${call.callerName ?? 'Someone'} is starting a group call` : 'incoming video call'}
           isGroup={call.mode === 'group'}
           onAccept={() => {
@@ -794,51 +865,26 @@ function Shell({ name, onSignOut }) {
           onDecline={decline}
         />
       )}
-      {(call.status === 'outgoing' || call.status === 'active') && (
-        <CallOverlay
-          call={call}
-          title={callTitle}
-          names={nameOf}
-          localStream={localStream}
-          remoteStreams={remoteStreams}
-          micOn={micOn}
-          camOn={camOn}
-          sharing={sharing}
-          sharers={sharers}
-          camsOff={camsOff}
-          quality={quality}
-          lowBandwidth={lowBandwidth}
-          onToggleMic={toggleMic}
-          onToggleCam={toggleCam}
-          onToggleShare={toggleShare}
-          onHangup={hangup}
-          convo={convos[call.groupId ?? call.peerId]}
-          onSendChat={(text) => send(call.groupId ?? call.peerId, { t: 'text', text })}
-          onReadChat={() => markRead(call.groupId ?? call.peerId)}
-          inviteCandidates={
-            call.groupId
-              ? (groups.find((g) => g.id === call.groupId)?.members ?? []).filter(
-                  (m) => m.id !== clientId && !remoteStreams[m.id] && contacts.some((c) => c.id === m.id && c.online)
-                )
-              : []
-          }
-          onInvite={inviteToCall}
-        />
-      )}
     </div>
   )
 }
 
 export default function App() {
-  const [name, setName] = useState(null)
+  const [session, setSession] = useState(() => {
+    const name = localStorage.getItem('sable-name')
+    const username = localStorage.getItem('sable-username')
+    return name ? { name, username } : null
+  })
 
-  if (!name) return <Welcome onEnter={setName} />
+  if (!session) return <Welcome onEnter={setSession} />
   return (
     <Shell
-      name={name}
+      name={session.name}
+      username={session.username}
       onSignOut={() => {
         localStorage.removeItem('sable-name')
-        setName(null)
+        localStorage.removeItem('sable-username')
+        setSession(null)
       }}
     />
   )

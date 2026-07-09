@@ -118,18 +118,17 @@ for (const g of await store.loadGroups()) {
 }
 console.log(`restored ${known.size} users, ${groups.size} groups`)
 
-const directory = () => {
-  const list = []
-  for (const [id, u] of known) {
-    list.push({ id, name: u.name, pubKey: u.pubKey, online: online.has(id), lastSeen: u.lastSeen })
+const notifyPresence = async (userId, onlineState, lastSeen) => {
+  const contacts = await store.getContacts(userId)
+  for (const c of contacts) {
+    if (c.status !== 'accepted') continue
+    const peerId = c.requester_id === userId ? c.recipient_id : c.requester_id
+    const peerSocket = online.get(peerId)
+    if (peerSocket) {
+      io.to(peerSocket.socketId).emit('presence', { id: userId, online: onlineState, lastSeen })
+    }
   }
-  for (const [id, u] of online) {
-    if (!known.has(id)) list.push({ id, name: u.name, pubKey: u.pubKey, online: true, lastSeen: Date.now() })
-  }
-  return list
 }
-
-const broadcastDirectory = () => io.emit('directory', directory())
 
 const groupInfo = (id) => {
   const g = groups.get(id)
@@ -153,9 +152,17 @@ const emitToMembers = (groupId, event, data, exceptId) => {
 }
 
 io.on('connection', (socket) => {
-  socket.on('hello', async ({ id, name, pubKey }) => {
+  socket.on('hello', async ({ id, name, username, pubKey }) => {
     if (typeof id !== 'string' || !id || typeof name !== 'string' || !name.trim() || !pubKey) return
     const cleanName = name.trim().slice(0, 32)
+    const cleanUsername = typeof username === 'string' ? username.trim().toLowerCase().slice(0, 32) : `user_${id.slice(0, 6)}`
+    
+    const isAvailable = await store.checkUsernameAvailable(cleanUsername, id)
+    if (!isAvailable) {
+      socket.emit('auth-error', 'Username is already taken')
+      return
+    }
+
     // one active session per identity: a fresh sign-in replaces the old tab
     const prev = online.get(id)
     if (prev && prev.socketId !== socket.id) {
@@ -164,10 +171,24 @@ io.on('connection', (socket) => {
       old?.disconnect(true)
     }
     socket.data.clientId = id
-    online.set(id, { socketId: socket.id, name: cleanName, pubKey })
-    known.set(id, { name: cleanName, pubKey, lastSeen: Date.now() })
-    store.upsertUser(id, cleanName, JSON.stringify(pubKey))
-    broadcastDirectory()
+    online.set(id, { socketId: socket.id, name: cleanName, username: cleanUsername, pubKey })
+    known.set(id, { name: cleanName, username: cleanUsername, pubKey, lastSeen: Date.now() })
+    store.upsertUser(id, cleanName, JSON.stringify(pubKey), cleanUsername)
+    
+    // Send contacts to the user instead of global directory
+    const getContactsWithPresence = async (userId) => {
+      const contacts = await store.getContacts(userId)
+      return contacts.map(c => {
+        const peerId = c.requester_id === userId ? c.recipient_id : c.requester_id
+        return { ...c, online: online.has(peerId) }
+      })
+    }
+
+    const contacts = await getContactsWithPresence(id)
+    socket.emit('contacts', contacts)
+
+    // Notify accepted contacts that this user is online
+    notifyPresence(id, true, Date.now())
 
     for (const [gid, g] of groups) {
       if (g.members.has(id)) socket.emit('group-added', groupInfo(gid))
@@ -195,24 +216,110 @@ io.on('connection', (socket) => {
   const clientId = () => socket.data.clientId
   const myPub = () => JSON.stringify(online.get(clientId())?.pubKey ?? null)
 
+  // ----- user search & contacts -----
+  socket.on('search-users', async (query) => {
+    const from = clientId()
+    if (!from || typeof query !== 'string' || query.trim().length < 2) return
+    const cleanQuery = query.trim().replace(/^@/, '')
+    if (cleanQuery.length < 2) return
+    const results = await store.searchUsers(cleanQuery)
+    // Exclude self
+    socket.emit('search-results', results.filter(u => u.id !== from))
+  })
+
+  socket.on('contact-request', async ({ to }) => {
+    const from = clientId()
+    if (!from || !to || from === to) return
+    store.upsertContact(from, to, 'pending')
+    const target = online.get(to)
+    if (target) io.to(target.socketId).emit('contact-updated', await getContactsWithPresence(to))
+    socket.emit('contact-updated', await getContactsWithPresence(from))
+  })
+
+  socket.on('contact-accept', async ({ to }) => {
+    const from = clientId()
+    if (!from || !to) return
+    // "to" is the original requester, "from" is accepting
+    store.upsertContact(to, from, 'accepted')
+    const target = online.get(to)
+    if (target) io.to(target.socketId).emit('contact-updated', await getContactsWithPresence(to))
+    socket.emit('contact-updated', await getContactsWithPresence(from))
+    notifyPresence(from, true, Date.now())
+  })
+
+  socket.on('contact-reject', async ({ to }) => {
+    const from = clientId()
+    if (!from || !to) return
+    store.upsertContact(to, from, 'rejected')
+    const target = online.get(to)
+    if (target) io.to(target.socketId).emit('contact-updated', await getContactsWithPresence(to))
+    socket.emit('contact-updated', await getContactsWithPresence(from))
+  })
+
+  socket.on('contact-remove', async ({ to }) => {
+    const from = clientId()
+    if (!from || !to) return
+    store.deleteContact(from, to)
+    const target = online.get(to)
+    if (target) io.to(target.socketId).emit('contact-updated', await getContactsWithPresence(to))
+    socket.emit('contact-updated', await getContactsWithPresence(from))
+  })
+
+  // ----- invitations -----
+  socket.on('create-invite', async (options) => {
+    const from = clientId()
+    if (!from) return
+    const code = crypto.randomUUID().split('-')[0] // short code
+    const expiresAt = options?.expiresIn ? Date.now() + options.expiresIn : null
+    store.createInvite(crypto.randomUUID(), code, from, expiresAt)
+    socket.emit('invite-created', { code, expiresAt })
+  })
+
+  socket.on('get-invite', async ({ code }, callback) => {
+    if (!code || typeof callback !== 'function') return
+    const invite = await store.getInvite(code)
+    if (!invite) return callback({ error: 'Invite not found' })
+    if (invite.expires_at && invite.expires_at < Date.now()) return callback({ error: 'Invite expired' })
+    callback({ invite })
+  })
+
   // ----- direct routing -----
-  const route = (event) => (msg) => {
+  const route = (event) => async (msg) => {
     const from = clientId()
     const target = from && msg && online.get(msg.to)
     if (!target) return
+    
+    // Check contact status before routing sensitive events
+    const contacts = await store.getContacts(from)
+    const contact = contacts.find(c => 
+      (c.requester_id === from && c.recipient_id === msg.to) || 
+      (c.recipient_id === from && c.requester_id === msg.to)
+    )
+    
+    if (!contact || contact.status !== 'accepted') return // Must be accepted contact
+    
     io.to(target.socketId).emit(event, { ...msg, from, fromName: online.get(from)?.name })
   }
 
   socket.on('typing', route('typing'))
-  for (const ev of ['call-offer', 'call-answer', 'call-ice', 'call-end', 'call-decline', 'share-state', 'cam-state']) {
+  for (const ev of ['call-offer', 'call-answer', 'call-ice', 'call-end', 'call-decline', 'share-state', 'cam-state', 'mic-state']) {
     socket.on(ev, route(ev))
   }
 
   // dm: { to, id, payload, selfPayload?, ts } — payload sealed for the
   // recipient, selfPayload sealed for the sender (their own history copy)
-  socket.on('dm', ({ to, id, payload, selfPayload, ts }) => {
+  socket.on('dm', async ({ to, id, payload, selfPayload, ts }) => {
     const from = clientId()
     if (!from || !to || !payload) return
+    
+    const contacts = await store.getContacts(from)
+    const contact = contacts.find(c => 
+      (c.requester_id === from && c.recipient_id === to) || 
+      (c.recipient_id === from && c.requester_id === to)
+    )
+    
+    if (!contact || contact.status !== 'accepted') return // Prevent DM if not accepted
+
     const recipient = online.get(to)
     const wasRouted = !!recipient
     if (recipient) {
@@ -334,7 +441,7 @@ io.on('connection', (socket) => {
       const k = known.get(id)
       if (k) k.lastSeen = Date.now()
       store.touchUser(id)
-      broadcastDirectory()
+      notifyPresence(id, false, Date.now())
     }
   })
 })

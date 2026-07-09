@@ -33,6 +33,7 @@ export function useCall(socketRef, myId, onLog) {
   const [sharing, setSharing] = useState(false)
   const [sharers, setSharers] = useState({}) // remote peerId -> true
   const [camsOff, setCamsOff] = useState({}) // remote peerId -> true (their camera is off)
+  const [micsOff, setMicsOff] = useState({}) // remote peerId -> true (their mic is off)
   const [quality, setQuality] = useState(null) // { level, rttMs, lossPct, kbps }
   const [lowBandwidth, setLowBandwidth] = useState(false)
   const restartAttempts = useRef(new Map()) // peerId -> count
@@ -136,6 +137,7 @@ export function useCall(socketRef, myId, onLog) {
     setSharing(false)
     setSharers({})
     setCamsOff({})
+    setMicsOff({})
     setQuality(null)
     setLowBandwidth(false)
     restartAttempts.current.clear()
@@ -208,6 +210,9 @@ export function useCall(socketRef, myId, onLog) {
     if (localRef.current && !localRef.current.getVideoTracks().some((t) => t.enabled)) {
       socketRef.current?.emit('cam-state', { to: peerId, camOn: false })
     }
+    if (localRef.current && !localRef.current.getAudioTracks().some((t) => t.enabled)) {
+      socketRef.current?.emit('mic-state', { to: peerId, micOn: false })
+    }
     pc.onicecandidate = (e) =>
       e.candidate && socketRef.current?.emit('call-ice', { to: peerId, candidate: e.candidate })
     pc.ontrack = (e) => setRemoteStreams((s) => ({ ...s, [peerId]: e.streams[0] }))
@@ -238,6 +243,11 @@ export function useCall(socketRef, myId, onLog) {
       return next
     })
     setCamsOff((s) => {
+      const next = { ...s }
+      delete next[peerId]
+      return next
+    })
+    setMicsOff((s) => {
       const next = { ...s }
       delete next[peerId]
       return next
@@ -373,6 +383,15 @@ export function useCall(socketRef, myId, onLog) {
       })
     }
 
+    const onMicState = ({ from, micOn }) => {
+      setMicsOff((s) => {
+        const next = { ...s }
+        if (micOn) delete next[from]
+        else next[from] = true
+        return next
+      })
+    }
+
     socket.on('call-offer', onOffer)
     socket.on('call-answer', onAnswer)
     socket.on('call-ice', onIce)
@@ -383,6 +402,7 @@ export function useCall(socketRef, myId, onLog) {
     socket.on('gcall-leave', onGroupLeave)
     socket.on('share-state', onShareState)
     socket.on('cam-state', onCamState)
+    socket.on('mic-state', onMicState)
 
     return () => {
       socket.off('call-offer', onOffer)
@@ -395,6 +415,7 @@ export function useCall(socketRef, myId, onLog) {
       socket.off('gcall-leave', onGroupLeave)
       socket.off('share-state', onShareState)
       socket.off('cam-state', onCamState)
+      socket.off('mic-state', onMicState)
     }
   }, [socketRef, teardown]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -468,9 +489,16 @@ export function useCall(socketRef, myId, onLog) {
     teardown()
   }, [socketRef, teardown]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const setMicEnabled = (enabled) => {
+    localRef.current?.getAudioTracks().forEach((t) => { t.enabled = enabled })
+    setMicOn(enabled)
+    for (const peerId of pcs.current.keys()) {
+      socketRef.current?.emit('mic-state', { to: peerId, micOn: enabled })
+    }
+  }
+
   const toggleMic = useCallback(() => {
-    localRef.current?.getAudioTracks().forEach((t) => { t.enabled = !t.enabled })
-    setMicOn((v) => !v)
+    setMicEnabled(!(localRef.current?.getAudioTracks().some((t) => t.enabled)))
   }, [])
 
   const setCamEnabled = (enabled) => {
@@ -539,7 +567,7 @@ export function useCall(socketRef, myId, onLog) {
   }, [socketRef]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
-    call, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, quality, lowBandwidth,
+    call, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, micsOff, quality, lowBandwidth,
     startCall, startGroupCall, accept, decline, hangup, toggleMic, toggleCam, toggleShare, inviteToCall,
   }
 }
