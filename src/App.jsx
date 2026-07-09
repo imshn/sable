@@ -4,6 +4,29 @@ import { useCall } from './useCall.js'
 import { Icon } from './icons.jsx'
 import { Thread, callLogText, Linkified } from './Thread.jsx'
 
+function useTheme() {
+  const [theme, setTheme] = useState(() => localStorage.getItem('sable-theme') ?? 'dark')
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem('sable-theme', theme)
+  }, [theme])
+  return [theme, () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))]
+}
+
+function ThemeToggle({ className }) {
+  const [theme, toggle] = useTheme()
+  return (
+    <button
+      className={`icon-btn subtle ${className ?? ''}`}
+      aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+      title={theme === 'dark' ? 'Light theme' : 'Dark theme'}
+      onClick={toggle}
+    >
+      {theme === 'dark' ? Icon.sun : Icon.moon}
+    </button>
+  )
+}
+
 function Welcome({ onEnter }) {
   const [name, setName] = useState(localStorage.getItem('sable-name') ?? '')
 
@@ -21,6 +44,7 @@ function Welcome({ onEnter }) {
         <div className="wordmark">
           <span className="wordmark-glyph">{Icon.lock}</span>
           sable
+          <ThemeToggle className="lobby-theme" />
         </div>
         <h1>
           Conversations that
@@ -98,6 +122,7 @@ function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, safetyCod
         <div className="me">
           <span className={`status-dot ${connected ? 'on' : ''}`} aria-hidden="true" />
           {name}
+          <ThemeToggle />
           <button className="icon-btn subtle" aria-label="New group" title="New group" onClick={onNewGroup}>
             {Icon.users}
           </button>

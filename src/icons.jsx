@@ -37,4 +37,6 @@ export const Icon = {
   monitor: svg(<><rect x="3" y="4.5" width="18" height="12.5" rx="2" /><path d="M9 21h6" /><path d="M12 17v4" /></>),
   monitorOff: svg(<><rect x="3" y="4.5" width="18" height="12.5" rx="2" /><path d="M9 21h6" /><path d="M12 17v4" /><path d="m5 6.5 14 8.5" /></>),
   userPlus: svg(<><circle cx="10" cy="8" r="3.2" /><path d="M4.5 19c.6-3 2.8-4.8 5.5-4.8s4.9 1.8 5.5 4.8" /><path d="M18 7v6" /><path d="M15 10h6" /></>),
+  sun: svg(<><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2.5" /><path d="M12 19v2.5" /><path d="M2.5 12H5" /><path d="M19 12h2.5" /><path d="m5 5 1.8 1.8" /><path d="m17.2 17.2 1.8 1.8" /><path d="m19 5-1.8 1.8" /><path d="m6.8 17.2-1.8 1.8" /></>),
+  moon: svg(<path d="M20 13.5A8 8 0 0 1 10.5 4 8 8 0 1 0 20 13.5Z" />),
 }

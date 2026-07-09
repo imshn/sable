@@ -14,10 +14,50 @@
   --accent-ink: #062a25;
   --danger: #e5484d;
   --danger-soft: rgba(229, 72, 77, 0.14);
+  --chip-bg: rgba(255, 255, 255, 0.04);
+  --chip-bg-hover: rgba(255, 255, 255, 0.08);
+  --grain: rgba(255, 255, 255, 0.025);
   --radius: 14px;
   --spring: cubic-bezier(0.22, 1.2, 0.36, 1);
   --font-sans: 'Outfit', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  color-scheme: dark;
+}
+
+[data-theme='light'] {
+  --bg: #f3f4f6;
+  --surface: #ffffff;
+  --surface-2: #e9ebee;
+  --border: rgba(17, 24, 28, 0.08);
+  --border-strong: rgba(17, 24, 28, 0.16);
+  --text: #17191e;
+  --muted: #5d6470;
+  --accent: #0f766e;
+  --accent-soft: rgba(15, 118, 110, 0.1);
+  --accent-ink: #ffffff;
+  --danger: #d92d20;
+  --danger-soft: rgba(217, 45, 32, 0.1);
+  --chip-bg: rgba(17, 24, 28, 0.04);
+  --chip-bg-hover: rgba(17, 24, 28, 0.08);
+  --grain: rgba(17, 24, 28, 0.02);
+  color-scheme: light;
+}
+
+/* calls stay dark in both themes, like Meet */
+.call-overlay,
+.lightbox {
+  --bg: #0b0c0f;
+  --surface: #14161b;
+  --surface-2: #1b1e25;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.13);
+  --text: #e9eaee;
+  --muted: #878b98;
+  --accent: #2dd4bf;
+  --accent-soft: rgba(45, 212, 191, 0.12);
+  --accent-ink: #062a25;
+  --chip-bg: rgba(255, 255, 255, 0.04);
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; margin: 0; }
@@ -40,7 +80,7 @@ body::before {
   inset: 0;
   pointer-events: none;
   opacity: 0.35;
-  background-image: radial-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-image: radial-gradient(var(--grain) 1px, transparent 1px);
   background-size: 3px 3px;
   z-index: 0;
 }
@@ -621,14 +661,14 @@ button:focus-visible {
   width: min(300px, 60vw);
   border-radius: 12px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--chip-bg);
   border-left: 3px solid var(--accent);
   text-decoration: none;
   color: var(--text);
   transition: background 160ms ease;
 }
 
-.link-preview:hover { background: rgba(255, 255, 255, 0.08); }
+.link-preview:hover { background: var(--chip-bg-hover); }
 
 .link-preview img {
   width: 100%;
@@ -813,14 +853,14 @@ video.media { width: min(320px, 62vw); }
   gap: 11px;
   padding: 10px 12px;
   border-radius: 13px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--chip-bg);
   text-decoration: none;
   color: var(--text);
   max-width: min(300px, 60vw);
   transition: background 160ms ease;
 }
 
-.file-chip:hover { background: rgba(255, 255, 255, 0.08); }
+.file-chip:hover { background: var(--chip-bg-hover); }
 
 .file-chip-icon { color: var(--accent); flex-shrink: 0; }
 
@@ -1214,9 +1254,9 @@ video.media { width: min(320px, 62vw); }
 
 .drawer-glyph.photos { background: var(--accent-soft); color: var(--accent); }
 .drawer-glyph.audio { background: rgba(147, 130, 255, 0.14); color: #9382ff; }
-.drawer-glyph.docs { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+.drawer-glyph.docs { background: var(--chip-bg-hover); color: var(--text); }
 .drawer-glyph.loc-glyph { background: var(--accent-soft); color: var(--accent); }
-.drawer-glyph.maps { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+.drawer-glyph.maps { background: var(--chip-bg-hover); color: var(--text); }
 
 /* ---------- Modals (location, forward) ---------- */
 
