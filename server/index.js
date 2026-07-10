@@ -121,6 +121,25 @@ const httpServer = createServer(async (req, res) => {
       return res.end(JSON.stringify(results))
     }
 
+    // Operator-triggered broadcast (no in-app admin UI — Shaan calls this
+    // directly, e.g. via curl, when there's a real update to announce).
+    if (u.pathname === '/admin/announce' && req.method === 'POST') {
+      res.setHeader('Content-Type', 'application/json')
+      if (!process.env.ADMIN_SECRET || req.headers['x-admin-secret'] !== process.env.ADMIN_SECRET) {
+        res.writeHead(401)
+        return res.end(JSON.stringify({ error: 'unauthorized' }))
+      }
+      const chunks = []
+      for await (const chunk of req) chunks.push(chunk)
+      const { title, body } = JSON.parse(Buffer.concat(chunks).toString() || '{}')
+      if (!title?.trim() || !body?.trim()) {
+        res.writeHead(400)
+        return res.end(JSON.stringify({ error: 'title and body are required' }))
+      }
+      const notified = await broadcastAnnouncement(title.trim(), body.trim())
+      return res.end(JSON.stringify({ ok: true, notified }))
+    }
+
     if (u.pathname !== '/preview') {
       res.writeHead(404)
       return res.end()
@@ -217,6 +236,23 @@ async function notifyOffline(userId, prefKey, payload) {
     const result = await sendPush(sub, payload)
     if (result.expired) store.deletePushSubscription(sub.endpoint)
   }
+}
+
+// ponytail: allUsers() caps at 200 most-recently-active — fine for this
+// app's scale, revisit with a paged sweep if the user base outgrows it.
+async function broadcastAnnouncement(title, body) {
+  const payload = { title, body, ts: Date.now() }
+  const users = await store.allUsers()
+  let notified = 0
+  for (const u of users) {
+    const onlineInfo = online.get(u.id)
+    const prefs = await store.getNotificationPrefs(u.id)
+    if (prefs && prefs.announcements === 0) continue
+    if (onlineInfo) io.to(onlineInfo.socketId).emit('announcement', payload)
+    else await notifyOffline(u.id, 'announcements', { title, body: body.slice(0, 120), tag: 'announcement', url: '/' })
+    notified++
+  }
+  return notified
 }
 
 // ------------------------------------------------------------------
@@ -636,6 +672,8 @@ io.on('connection', (socket) => {
       calls:            prefs.calls            !== false,
       contact_requests: prefs.contact_requests !== false,
       mentions:         prefs.mentions         !== false,
+      group_activity:   prefs.group_activity   !== false,
+      announcements:    prefs.announcements    !== false,
     })
     socket.emit('notification-prefs', await store.getNotificationPrefs(from))
   })
@@ -650,6 +688,14 @@ io.on('connection', (socket) => {
     const result = sessions.map(s => ({ ...s, isCurrent: s.id === currentSessionId }))
     if (typeof callback === 'function') callback(result)
     else socket.emit('sessions', result)
+  })
+
+  socket.on('get-login-history', async (callback) => {
+    const from = clientId()
+    if (!from) return
+    const history = await store.getLoginHistory(from)
+    if (typeof callback === 'function') callback(history)
+    else socket.emit('login-history', history)
   })
 
   socket.on('revoke-session', async ({ sessionId }) => {
@@ -796,8 +842,14 @@ io.on('connection', (socket) => {
 
   socket.on('group-delete', ({ groupId }) => {
     const g = groups.get(groupId)
-    if (!g || g.owner !== clientId()) return
-    emitToMembers(groupId, 'group-removed', { id: groupId, by: online.get(clientId())?.name })
+    const from = clientId()
+    if (!g || g.owner !== from) return
+    const by = online.get(from)?.name
+    emitToMembers(groupId, 'group-removed', { id: groupId, by })
+    for (const m of g.members) {
+      if (m === from) continue
+      notifyOffline(m, 'group_activity', { title: g.name, body: `${by ?? 'Someone'} deleted the group`, tag: `group-${groupId}`, url: '/' })
+    }
     groups.delete(groupId)
     store.deleteGroup(groupId)
   })
@@ -806,7 +858,8 @@ io.on('connection', (socket) => {
     const g = groups.get(groupId)
     const from = clientId()
     if (!g || !g.members.has(from)) return
-    emitToMembers(groupId, 'group-left', { id: groupId, memberId: from, name: online.get(from)?.name })
+    const leaverName = online.get(from)?.name
+    emitToMembers(groupId, 'group-left', { id: groupId, memberId: from, name: leaverName })
     g.members.delete(from)
     if (g.members.size < 2) {
       emitToMembers(groupId, 'group-removed', { id: groupId })
@@ -816,6 +869,9 @@ io.on('connection', (socket) => {
       if (g.owner === from) g.owner = [...g.members][0]
       store.saveGroup(groupId, g.name, g.owner, [...g.members])
       emitToMembers(groupId, 'group-added', groupInfo(groupId))
+      for (const m of g.members) {
+        notifyOffline(m, 'group_activity', { title: g.name, body: `${leaverName ?? 'Someone'} left the group`, tag: `group-${groupId}`, url: '/' })
+      }
     }
   })
 
@@ -830,9 +886,13 @@ io.on('connection', (socket) => {
     const names = added.map((m) => online.get(m)?.name ?? known.get(m)?.name).join(', ')
     emitToMembers(groupId, 'group-added', groupInfo(groupId))
     for (const m of g.members) {
-      if (added.includes(m)) continue
+      if (added.includes(m)) {
+        notifyOffline(m, 'group_activity', { title: g.name, body: 'You were added to the group', tag: `group-${groupId}`, url: '/' })
+        continue
+      }
       const u = online.get(m)
       if (u) io.to(u.socketId).emit('group-joined', { id: groupId, names })
+      else notifyOffline(m, 'group_activity', { title: g.name, body: `${names} joined the group`, tag: `group-${groupId}`, url: '/' })
     }
   })
 

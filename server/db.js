@@ -84,7 +84,9 @@ export async function migrate() {
       messages INTEGER NOT NULL DEFAULT 1,
       calls INTEGER NOT NULL DEFAULT 1,
       contact_requests INTEGER NOT NULL DEFAULT 1,
-      mentions INTEGER NOT NULL DEFAULT 1
+      mentions INTEGER NOT NULL DEFAULT 1,
+      group_activity INTEGER NOT NULL DEFAULT 1,
+      announcements INTEGER NOT NULL DEFAULT 1
     )`,
     // Session tracking (lightweight — option A, trust model unchanged)
     `CREATE TABLE IF NOT EXISTS user_sessions (
@@ -142,6 +144,8 @@ export async function migrate() {
   await addCol("ALTER TABLE users ADD COLUMN updated_at INTEGER")
   await addCol("ALTER TABLE users ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
   await addCol("ALTER TABLE privacy_settings ADD COLUMN bio_privacy TEXT NOT NULL DEFAULT 'everyone'")
+  await addCol("ALTER TABLE notification_preferences ADD COLUMN group_activity INTEGER NOT NULL DEFAULT 1")
+  await addCol("ALTER TABLE notification_preferences ADD COLUMN announcements INTEGER NOT NULL DEFAULT 1")
 
   // Fallback for existing users and index
   await db.execute("UPDATE users SET username = 'user_' || substr(id, 1, 6) WHERE username IS NULL")
@@ -422,17 +426,18 @@ export const store = {
   getNotificationPrefs: async (userId) => {
     if (!db) return null
     const r = await db.execute({ sql: `SELECT * FROM notification_preferences WHERE user_id=?`, args: [userId] })
-    return r.rows[0] || { user_id: userId, messages: 1, calls: 1, contact_requests: 1, mentions: 1 }
+    return r.rows[0] || { user_id: userId, messages: 1, calls: 1, contact_requests: 1, mentions: 1, group_activity: 1, announcements: 1 }
   },
 
-  saveNotificationPrefs: (userId, { messages, calls, contact_requests, mentions }) =>
+  saveNotificationPrefs: (userId, { messages, calls, contact_requests, mentions, group_activity, announcements }) =>
     db && safe(db.execute({
-      sql: `INSERT INTO notification_preferences (user_id, messages, calls, contact_requests, mentions)
-            VALUES (?, ?, ?, ?, ?)
+      sql: `INSERT INTO notification_preferences (user_id, messages, calls, contact_requests, mentions, group_activity, announcements)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
               messages=excluded.messages, calls=excluded.calls,
-              contact_requests=excluded.contact_requests, mentions=excluded.mentions`,
-      args: [userId, messages ? 1 : 0, calls ? 1 : 0, contact_requests ? 1 : 0, mentions ? 1 : 0]
+              contact_requests=excluded.contact_requests, mentions=excluded.mentions,
+              group_activity=excluded.group_activity, announcements=excluded.announcements`,
+      args: [userId, messages ? 1 : 0, calls ? 1 : 0, contact_requests ? 1 : 0, mentions ? 1 : 0, group_activity ? 1 : 0, announcements ? 1 : 0]
     })),
 
   // ---- Sessions ----
@@ -452,6 +457,18 @@ export const store = {
       sql: `SELECT id, socket_id, ip, user_agent, device_hint, logged_in_at, last_active FROM user_sessions
             WHERE user_id=? AND revoked=0 ORDER BY last_active DESC LIMIT 20`,
       args: [userId]
+    })
+    return r.rows
+  },
+
+  // Every login ever recorded (active or since ended), newest first — the
+  // same user_sessions rows getSessions filters to revoked=0, just unfiltered.
+  getLoginHistory: async (userId, limit = 20) => {
+    if (!db) return []
+    const r = await db.execute({
+      sql: `SELECT id, ip, device_hint, logged_in_at, last_active, revoked FROM user_sessions
+            WHERE user_id=? ORDER BY logged_in_at DESC LIMIT ?`,
+      args: [userId, limit]
     })
     return r.rows
   },

@@ -14,6 +14,7 @@ const deviceLabel = (t) => (t === 'singleDevice' ? 'This device only' : t === 'm
 
 export function SecurityPage({ socket, passkeys, onFetchPasskeys, onDeletePasskey, onRegisterPasskey }) {
   const [sessions, setSessions] = useState(null)
+  const [history, setHistory] = useState(null)
   const [revoking, setRevoking] = useState(null)
   const [confirmed, setConfirmed] = useState(false)
   const [addingPasskey, setAddingPasskey] = useState(false)
@@ -25,6 +26,11 @@ export function SecurityPage({ socket, passkeys, onFetchPasskeys, onDeletePasske
     socket.on('sessions', handle)
     socket.emit('get-sessions', (s) => setSessions(s))
     return () => socket.off('sessions', handle)
+  }, [socket])
+
+  useEffect(() => {
+    if (!socket) return
+    socket.emit('get-login-history', (rows) => setHistory(rows))
   }, [socket])
 
   useEffect(() => {
@@ -183,13 +189,34 @@ export function SecurityPage({ socket, passkeys, onFetchPasskeys, onDeletePasske
         )}
       </div>
 
-      {/* Login history note */}
-      <div className="settings-section" style={{ opacity: 0.6 }}>
+      {/* Login history */}
+      <div className="settings-section">
         <div className="settings-section-title">
           <span className="settings-section-icon">{Icon.info}</span>
           Login History
         </div>
-        <p className="empty-sub" style={{ marginTop: 0 }}>Detailed login history will be available in a future update. Sessions are currently tracked for the last 20 logins.</p>
+        <p className="empty-sub" style={{ marginTop: 0, marginBottom: 12 }}>Your last 20 logins on any device.</p>
+
+        {history === null ? (
+          <p className="empty-sub">Loading…</p>
+        ) : history.length === 0 ? (
+          <p className="empty-sub">No login history yet.</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {history.map((h) => (
+              <div key={h.id} className="session-card">
+                <div className="session-card-icon">{Icon.device}</div>
+                <div className="session-card-body">
+                  <span className="session-device">{h.device_hint || 'Unknown device'}</span>
+                  <span className="session-meta">{RELATIVE(h.logged_in_at)} · {h.ip || 'IP hidden'}</span>
+                </div>
+                <span className="session-badge" style={!h.revoked ? undefined : { opacity: 0.6 }}>
+                  {h.revoked ? 'Signed out' : 'Active'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

@@ -670,7 +670,7 @@ function Shell({ name, username, onSignOut }) {
   const chat = useChat(name, username)
   const {
     clientId, contacts, groups, convos, connected, safetyCode, sessionReplaced, authError, myProfile,
-    passkeyRequired, passkeyError, passkeys, pushEnabled,
+    passkeyRequired, passkeyError, passkeys, pushEnabled, announcement, dismissAnnouncement,
     send, react, deleteForAll, deleteForMe, addLocalEntry, deleteConversation,
     createGroup, deleteGroup, leaveGroup, inviteToGroup,
     sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, blockContact, unblockContact,
@@ -739,6 +739,12 @@ function Shell({ name, username, onSignOut }) {
   useEffect(() => {
     // We now render a ConfirmModal for authError below instead of alert
   }, [authError])
+
+  useEffect(() => {
+    if (!announcement) return
+    const t = setTimeout(() => dismissAnnouncement(), 8000)
+    return () => clearTimeout(t)
+  }, [announcement, dismissAnnouncement])
   const {
     call, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, micsOff, quality, lowBandwidth,
     startCall, startGroupCall, accept, decline, hangup, toggleMic, toggleCam, toggleShare, inviteToCall,
@@ -1009,6 +1015,16 @@ function Shell({ name, username, onSignOut }) {
           onConfirm={() => onSignOut()}
           onCancel={() => onSignOut()}
         />
+      )}
+
+      {announcement && (
+        <button
+          className="chat-toast"
+          style={{ top: '16px', bottom: 'auto', left: '50%', transform: 'translateX(-50%)' }}
+          onClick={dismissAnnouncement}
+        >
+          <strong>{announcement.title}</strong> {announcement.body}
+        </button>
       )}
     </div>
   )

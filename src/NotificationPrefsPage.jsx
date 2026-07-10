@@ -42,7 +42,10 @@ export function NotificationPrefsPage({ socket, pushEnabled, onEnablePush, onDis
 
   useEffect(() => {
     if (!socket) return
-    const handle = (p) => setPrefs({ messages: !!p.messages, calls: !!p.calls, contact_requests: !!p.contact_requests, mentions: !!p.mentions })
+    const handle = (p) => setPrefs({
+      messages: !!p.messages, calls: !!p.calls, contact_requests: !!p.contact_requests, mentions: !!p.mentions,
+      group_activity: p.group_activity !== 0, announcements: p.announcements !== 0,
+    })
     socket.on('notification-prefs', handle)
     socket.emit('get-notification-prefs')
     return () => socket.off('notification-prefs', handle)
@@ -96,6 +99,8 @@ export function NotificationPrefsPage({ socket, pushEnabled, onEnablePush, onDis
           <Toggle label="Calls" description="Get notified when you receive an incoming call" value={prefs.calls} onChange={v => update('calls', v)} />
           <Toggle label="Contact Requests" description="Get notified when someone sends you a contact request" value={prefs.contact_requests} onChange={v => update('contact_requests', v)} />
           <Toggle label="Mentions" description="Get notified when you are mentioned in a group" value={prefs.mentions} onChange={v => update('mentions', v)} />
+          <Toggle label="Group Activity" description="Get notified when members join, leave, or a group is deleted" value={prefs.group_activity} onChange={v => update('group_activity', v)} />
+          <Toggle label="Announcements" description="Updates from the Sable team" value={prefs.announcements} onChange={v => update('announcements', v)} />
         </div>
       </div>
 
@@ -104,29 +109,6 @@ export function NotificationPrefsPage({ socket, pushEnabled, onEnablePush, onDis
           {Icon.checkCircle} Preferences saved
         </span>
       )}
-
-      <div className="settings-section" style={{ opacity: 0.5 }}>
-        <div className="settings-section-title">
-          <span className="settings-section-icon">{Icon.bell}</span>
-          Coming Soon
-        </div>
-        <div className="privacy-rows">
-          <div className="notif-row">
-            <div className="notif-row-label">
-              <span className="notif-row-title">Group Activity</span>
-              <span className="notif-row-desc">Notifications for group events</span>
-            </div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--muted)', padding: '4px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>Soon</div>
-          </div>
-          <div className="notif-row">
-            <div className="notif-row-label">
-              <span className="notif-row-title">Announcements</span>
-              <span className="notif-row-desc">Updates from the Sable team</span>
-            </div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--muted)', padding: '4px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>Soon</div>
-          </div>
-        </div>
-      </div>
     </div>
   )
 }

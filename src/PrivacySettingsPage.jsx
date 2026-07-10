@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Icon } from './icons.jsx'
 
 const PRIVACY_OPTIONS = [
@@ -33,8 +33,8 @@ function PrivacyRow({ label, description, value, onChange }) {
 
 export function PrivacySettingsPage({ socket }) {
   const [settings, setSettings] = useState(null)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const [toast, setToast] = useState(null)
+  const toastTimer = useRef(null)
 
   useEffect(() => {
     if (!socket) return
@@ -44,17 +44,15 @@ export function PrivacySettingsPage({ socket }) {
     return () => socket.off('privacy-settings', handleSettings)
   }, [socket])
 
-  const update = (key, val) => {
-    setSettings(prev => ({ ...prev, [key]: val }))
-    setSaved(false)
-  }
+  useEffect(() => () => clearTimeout(toastTimer.current), [])
 
-  const save = () => {
-    if (!socket || !settings) return
-    setSaving(true)
-    socket.emit('save-privacy-settings', settings)
-    // Optimistically mark saved
-    setTimeout(() => { setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2000) }, 300)
+  const update = (key, val) => {
+    const next = { ...settings, [key]: val }
+    setSettings(next)
+    socket?.emit('save-privacy-settings', next)
+    setToast('Privacy setting updated')
+    clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), 2000)
   }
 
   if (!settings) {
@@ -117,16 +115,19 @@ export function PrivacySettingsPage({ socket }) {
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <button type="button" className="primary" onClick={save} disabled={saving} style={{ width: 'auto', padding: '10px 24px' }}>
-          {saving ? 'Saving…' : 'Save Changes'}
-        </button>
-        {saved && (
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--accent)', fontSize: '0.9rem' }}>
-            {Icon.checkCircle} Saved
-          </span>
-        )}
-      </div>
+      {toast && (
+        <div
+          style={{
+            position: 'fixed', bottom: 32, left: '50%', transform: 'translateX(-50%)',
+            display: 'flex', alignItems: 'center', gap: 8, padding: '10px 18px',
+            backgroundColor: 'var(--surface-2)', border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)', boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+            fontSize: '0.9rem', color: 'var(--accent)', zIndex: 20,
+          }}
+        >
+          {Icon.checkCircle} {toast}
+        </div>
+      )}
     </div>
   )
 }

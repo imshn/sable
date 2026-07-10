@@ -45,6 +45,7 @@ export function useChat(name, username) {
   const [passkeyError, setPasskeyError] = useState(null)
   const [passkeys, setPasskeys] = useState(null)
   const [pushEnabled, setPushEnabled] = useState(false)
+  const [announcement, setAnnouncement] = useState(null)
 
   const socketRef = useRef(null)
   const keyCache = useRef(new Map()) // JSON(jwk) -> Promise<CryptoKey>
@@ -168,6 +169,11 @@ export function useChat(name, username) {
       socket.on('passkeys', (rows) => {
         if (!alive) return
         setPasskeys(rows)
+      })
+
+      socket.on('announcement', (a) => {
+        if (!alive) return
+        setAnnouncement(a)
       })
 
       const parseContacts = (list) => {
@@ -540,7 +546,7 @@ export function useChat(name, username) {
 
   return {
     clientId, contacts, groups, convos, safetyCode, connected, sessionReplaced, authError, myProfile,
-    passkeyRequired, passkeyError, passkeys, pushEnabled,
+    passkeyRequired, passkeyError, passkeys, pushEnabled, announcement, dismissAnnouncement: () => setAnnouncement(null),
     send, react, deleteForAll, deleteForMe, addLocalEntry, deleteConversation,
     createGroup, deleteGroup, leaveGroup, inviteToGroup,
     sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, blockContact, unblockContact,
