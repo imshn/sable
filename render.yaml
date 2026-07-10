@@ -5,5 +5,5 @@ services:
     plan: free
     region: singapore
     buildCommand: npm install --omit=dev
-    startCommand: node server/index.js
+    startCommand: npx tsx server/index.ts
     healthCheckPath: /healthz

@@ -3,6 +3,7 @@ import type { Socket } from 'socket.io-client'
 import { useChat } from './useChat.ts'
 import { useCall, type OnLog } from './useCall.ts'
 import { useOnlineStatus } from './useOnlineStatus.ts'
+import { Toaster, toast } from 'sonner'
 import { Icon } from './icons.tsx'
 import { Thread, callLogText, Linkified } from './Thread.tsx'
 import { ContactsPage } from './ContactsPage.tsx'
@@ -888,30 +889,30 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
 
   useEffect(() => {
     if (!announcement) return
-    const t = setTimeout(() => dismissAnnouncement(), 8000)
-    return () => clearTimeout(t)
+    toast(announcement.title, { description: announcement.body, duration: 8000 })
+    dismissAnnouncement()
   }, [announcement, dismissAnnouncement])
 
   // Two independent signals: the browser's own network status, and whether
   // our socket is actually connected (server could be unreachable even with
   // a live network interface). Either one being bad means actions won't go
-  // through, so the banner covers both — with a brief "back online" toast
-  // once both recover, instead of the banner just silently vanishing.
+  // through. A stable toast id lets offline -> reconnecting -> back-online
+  // update one toast in place instead of stacking new ones.
   const isOnline = useOnlineStatus()
   const hadTrouble = useRef(false)
-  const [justReconnected, setJustReconnected] = useState(false)
   const networkTrouble = !isOnline || !connected
   useEffect(() => {
     if (networkTrouble) {
       hadTrouble.current = true
+      toast.warning(!isOnline ? "You're offline — messages will send once you're back online." : 'Reconnecting…', {
+        id: 'network-status', duration: Infinity,
+      })
       return
     }
     if (!hadTrouble.current) return
     hadTrouble.current = false
-    setJustReconnected(true)
-    const t = setTimeout(() => setJustReconnected(false), 2500)
-    return () => clearTimeout(t)
-  }, [networkTrouble])
+    toast.success('Back online', { id: 'network-status', duration: 2500 })
+  }, [networkTrouble, isOnline])
 
   const onLog: OnLog = (target, log) => addLocalEntry(target, { t: 'call', ...log } as unknown as ConvoMessage['body'], 'call')
   const {
@@ -995,19 +996,7 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
   const callTargetId = call.groupId ?? call.peerId ?? ''
 
   return (
-    <div className="app-shell-wrap">
-      {networkTrouble && (
-        <div className="network-banner" role="status">
-          {Icon.wifiOff}
-          {!isOnline ? "You're offline — messages will send once you're back online." : 'Reconnecting…'}
-        </div>
-      )}
-      {!networkTrouble && justReconnected && (
-        <div className="network-banner back-online" role="status">
-          {Icon.checkCircle} Back online
-        </div>
-      )}
-      <div className={`shell ${activeId ? 'thread-open' : ''}`}>
+    <div className={`shell ${activeId ? 'thread-open' : ''}`}>
       <Sidebar
         name={name}
         rows={sidebarRows}
@@ -1117,7 +1106,6 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
           </section>
         )}
       </main>
-      </div>
 
       {creatingGroup && (
         <NewGroupModal contacts={contacts.filter(c => c.status === 'accepted')} onCreate={createGroup} onClose={() => setCreatingGroup(false)} />
@@ -1202,15 +1190,6 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
         />
       )}
 
-      {announcement && (
-        <button
-          className="chat-toast"
-          style={{ top: '16px', bottom: 'auto', left: '50%', transform: 'translateX(-50%)' }}
-          onClick={dismissAnnouncement}
-        >
-          <strong>{announcement.title}</strong> {announcement.body}
-        </button>
-      )}
     </div>
   )
 }
@@ -1222,16 +1201,22 @@ export default function App() {
     return name && username ? { name, username } : null
   })
 
-  if (!session) return <Welcome onEnter={setSession} />
   return (
-    <Shell
-      name={session.name}
-      username={session.username}
-      onSignOut={() => {
-        localStorage.removeItem('sable-name')
-        localStorage.removeItem('sable-username')
-        setSession(null)
-      }}
-    />
+    <>
+      <Toaster theme="dark" position="top-center" richColors closeButton />
+      {!session ? (
+        <Welcome onEnter={setSession} />
+      ) : (
+        <Shell
+          name={session.name}
+          username={session.username}
+          onSignOut={() => {
+            localStorage.removeItem('sable-name')
+            localStorage.removeItem('sable-username')
+            setSession(null)
+          }}
+        />
+      )}
+    </>
   )
 }

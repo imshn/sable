@@ -275,41 +275,13 @@ button:focus-visible {
 
 /* ---------- Shell ---------- */
 
-.app-shell-wrap {
-  display: flex;
-  flex-direction: column;
-  height: 100dvh;
-  width: 100%;
-}
-
 .shell {
-  flex: 1;
-  min-height: 0;
+  height: 100dvh;
   width: 100%;
   display: grid;
   grid-template-columns: minmax(300px, 420px) 1fr;
   overflow: hidden; /* the page never scrolls — panes scroll internally */
 }
-
-.network-banner {
-  flex-shrink: 0;
-  z-index: 90;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 8px 16px;
-  font-size: 0.82rem;
-  font-weight: 500;
-  color: var(--text);
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border-strong);
-  animation: drop 320ms var(--spring) both;
-}
-
-.network-banner svg { width: 15px; height: 15px; flex-shrink: 0; }
-
-.network-banner.back-online { color: var(--accent); }
 
 /* ---------- Sidebar ---------- */
 

@@ -240,11 +240,12 @@ export function useChat(name: string, username: string) {
         const { keyFor } = await ready
         if (!alive) return
         const peers = parseContacts(list)
-        for (const peer of peers) {
-          if (!peerKeyRef.current.has(peer.id)) {
-            peerKeyRef.current.set(peer.id, keyFor(peer.pubKey))
-          }
-        }
+        // keyFor() already memoizes by the JWK's own content, so this stays
+        // cheap when a peer's key hasn't changed — but always refreshing
+        // here (like the 'contacts' handler above) matters for when it has
+        // (reinstall, cleared storage): a stale peerKeyRef entry would keep
+        // encrypting with a shared secret the peer can no longer derive.
+        for (const peer of peers) peerKeyRef.current.set(peer.id, keyFor(peer.pubKey))
         setContacts(peers)
       })
 
