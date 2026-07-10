@@ -932,7 +932,7 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
     call, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, micsOff, quality, lowBandwidth,
     activeSince,
     startCall, startGroupCall, accept, decline, hangup, toggleMic, toggleCam, toggleShare, inviteToCall,
-  } = useCall(socketRef, clientId, onLog)
+  } = useCall(socketRef, connected, clientId, onLog)
 
   // merged sidebar rows: groups + contacts, most recent first
   const sidebarRows: SidebarRow[] = [

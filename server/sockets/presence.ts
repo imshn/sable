@@ -76,6 +76,7 @@ export function registerPresence(socket: AppSocket): ConnectionCtx {
       senderPub: JSON.parse(r.sender_pub),
       groupId: r.group_id,
       payload: JSON.parse(r.payload),
+      delivered: !!r.delivered,
       ts: Number(r.ts),
     })))
     for (const row of undelivered) {

@@ -66,6 +66,7 @@ interface BacklogRow {
   payload: EncryptedPayload
   ts: number
   fromName?: string
+  delivered?: boolean
 }
 
 export function useChat(name: string, username: string) {
@@ -264,18 +265,36 @@ export function useChat(name: string, username: string) {
         const restored: Record<string, Convo> = {}
         const convoOf = (key: string) => (restored[key] ??= emptyConvo())
         for (const row of rows) {
-          let env: OutgoingEnvelope
+          let env: OutgoingEnvelope | null = null
           try {
             const key = row.from === clientId ? await selfKeyRef.current! : await keyFor(JSON.parse(row.senderPub))
             env = JSON.parse(await decrypt(key, row.payload))
           } catch {
-            continue // rotated keys or corrupt row — skip silently
+            // The embedded sender_pub *should* always match the peer's current
+            // key, but if it doesn't for any reason (e.g. a peer's identity was
+            // re-created), retry against their current key before giving up —
+            // matches the fallback the live 'dm' path gets for free via
+            // peerKeyRef, so a message doesn't succeed live and then silently
+            // disappear on the next reload.
+            if (row.from !== clientId) {
+              try {
+                const peerKey = await peerKeyRef.current.get(row.from)
+                if (peerKey) env = JSON.parse(await decrypt(peerKey, row.payload))
+              } catch { /* still undecryptable — fall through to the placeholder below */ }
+            }
           }
-          const convoKey = row.groupId ?? (row.from === clientId ? ('_to' in env ? env._to : undefined) : row.from)
+          const convoKey = row.groupId ?? (row.from === clientId ? (env && '_to' in env ? env._to : undefined) : row.from)
           if (!convoKey) continue
           const deletedAt = deletedAtRef.current.get(convoKey)
           if (deletedAt && row.ts <= deletedAt) continue // hidden by a "delete chat"
           const convo = convoOf(convoKey)
+          if (!env) {
+            // Never let a message just vanish — show why it's missing, same
+            // as the live 'dm' path already does for a failed decrypt.
+            convo.messages.push({ id: row.id, kind: 'error', body: { text: `A message from ${row.fromName ?? 'them'} could not be decrypted` }, ts: row.ts })
+            convo.lastTs = Math.max(convo.lastTs, row.ts)
+            continue
+          }
           if ('t' in env && env.t === 'react') {
             const reactor = row.from === clientId ? 'me' : row.from
             convo.messages = convo.messages.map((m) =>
@@ -296,7 +315,7 @@ export function useChat(name: string, username: string) {
             name: row.fromName,
             body: toBody(env),
             ts: row.ts,
-            status: row.from === clientId ? 'sent' : undefined,
+            status: row.from === clientId ? (row.delivered ? 'delivered' : 'sent') : undefined,
           })
           convo.lastTs = Math.max(convo.lastTs, row.ts)
         }

@@ -72,7 +72,7 @@ interface CamMicStatePayload {
   micOn?: boolean
 }
 
-export function useCall(socketRef: RefObject<Socket | null>, myId: string, onLog: OnLog) {
+export function useCall(socketRef: RefObject<Socket | null>, connected: boolean, myId: string, onLog: OnLog) {
   const [call, setCall] = useState<CallState>({ status: 'idle' })
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({})
@@ -313,8 +313,14 @@ export function useCall(socketRef: RefObject<Socket | null>, myId: string, onLog
   }
 
   useEffect(() => {
+    // `socketRef` is a ref, so its identity never changes — depending on it
+    // alone means this effect only ever runs once, at mount, and if the
+    // socket hasn't connected yet at that exact moment, every call listener
+    // below silently never registers for the rest of the session (identical
+    // bug to the one fixed in InvitePage/InviteModal). `connected` is what
+    // actually re-fires this once the socket is up.
     const socket = socketRef.current
-    if (!socket) return
+    if (!connected || !socket) return
 
     const onOffer = async ({ from, sdp, video, group, restart }: OfferPayload) => {
       const cur = callRef.current
@@ -465,7 +471,7 @@ export function useCall(socketRef: RefObject<Socket | null>, myId: string, onLog
       socket.off('cam-state', onCamState)
       socket.off('mic-state', onMicState)
     }
-  }, [socketRef, teardown]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [socketRef, connected, teardown]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const startCall = useCallback(async (peerId: string, video = true) => {
     if (callRef.current.status !== 'idle') return
