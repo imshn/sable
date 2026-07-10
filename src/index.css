@@ -2233,7 +2233,7 @@ video.media { width: min(320px, 62vw); }
 
 .contacts-filter-icon {
   position: absolute;
-  left: 14px;
+  left: 20px;
   top: 50%;
   transform: translateY(-50%);
   color: var(--muted);
