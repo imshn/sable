@@ -2319,6 +2319,108 @@ video.media { width: min(320px, 62vw); }
   border-color: transparent;
 }
 
+/* ---------- Invite landing page ---------- */
+
+.invite-page {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.invite-card {
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+  padding: clamp(2rem, 5vw, 2.75rem) clamp(1.5rem, 4vw, 2.25rem);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.55);
+  animation: rise 700ms var(--spring) both;
+}
+
+.invite-card .avatar.profile-lg { margin-bottom: 18px; }
+
+.invite-card h2 { font-size: 1.35rem; font-weight: 600; letter-spacing: -0.01em; }
+
+.invite-username { color: var(--muted); font-size: 0.92rem; margin-top: 2px; }
+
+.invite-text { color: var(--text); margin-top: 14px; font-size: 0.98rem; }
+
+.invite-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 26px;
+}
+
+.invite-actions .primary,
+.invite-actions .secondary {
+  width: 100%;
+  min-height: 48px;
+  border-radius: var(--radius);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-weight: 500;
+  transition: filter 150ms ease, transform 150ms ease;
+}
+
+.invite-actions .secondary {
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+}
+
+.invite-actions .secondary:hover { background: var(--chip-bg-hover); }
+.invite-actions .secondary:active { transform: translateY(1px) scale(0.99); }
+
+.invite-encrypted {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+  width: 100%;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.invite-encrypted svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+.invite-card-icon {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  margin-bottom: 14px;
+  color: var(--muted);
+  background: var(--surface-2);
+}
+
+.invite-card-icon.error { color: var(--danger); background: var(--danger-soft); }
+.invite-card-icon svg { width: 28px; height: 28px; }
+
+.invite-spinner {
+  width: 28px;
+  height: 28px;
+  border-width: 3px;
+  margin: 0 0 8px;
+  color: var(--accent);
+}
+
 .profile-detail-name { font-size: 1.25rem; font-weight: 600; }
 
 .profile-detail-username { color: var(--muted); font-size: 0.92rem; }

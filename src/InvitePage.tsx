@@ -1,5 +1,7 @@
 import { useState, useEffect, type RefObject } from 'react'
 import type { Socket } from 'socket.io-client'
+import { Icon } from './icons.tsx'
+import { avatarBg } from './avatarColor.ts'
 
 interface Invite {
   creator_id: string
@@ -35,10 +37,13 @@ export function InvitePage({ code, socketRef, connected, onJoin, onCancel }: Inv
   if (error) {
     return (
       <div className="invite-page">
-        <div className="invite-card error">
-          <h3>Invalid Invite</h3>
-          <p>{error}</p>
-          <button className="primary" onClick={onCancel}>Go to App</button>
+        <div className="invite-card">
+          <span className="invite-card-icon error">{Icon.alertCircle}</span>
+          <h2>Invalid invite</h2>
+          <p className="hint">{error}</p>
+          <div className="invite-actions">
+            <button type="button" className="primary" onClick={onCancel}>Go to App</button>
+          </div>
         </div>
       </div>
     )
@@ -48,7 +53,8 @@ export function InvitePage({ code, socketRef, connected, onJoin, onCancel }: Inv
     return (
       <div className="invite-page">
         <div className="invite-card">
-          <p>Loading invite...</p>
+          <span className="btn-spinner invite-spinner" />
+          <p className="hint" style={{ margin: 0 }}>Loading invite…</p>
         </div>
       </div>
     )
@@ -57,14 +63,19 @@ export function InvitePage({ code, socketRef, connected, onJoin, onCancel }: Inv
   return (
     <div className="invite-page">
       <div className="invite-card">
-        <span className="avatar large">{invite.creator_name.slice(0, 2).toUpperCase()}</span>
+        <span className="avatar profile-lg" style={{ background: avatarBg(invite.creator_id), color: '#fff' }}>
+          {invite.creator_name.slice(0, 2).toUpperCase()}
+        </span>
         <h2>{invite.creator_name}</h2>
-        <p>@{invite.creator_username}</p>
+        <p className="invite-username">@{invite.creator_username}</p>
         <p className="invite-text">has invited you to connect on Sable.</p>
         <div className="invite-actions">
-          <button className="primary" onClick={() => onJoin(invite.creator_id)}>Connect</button>
-          <button className="secondary" onClick={onCancel}>Decline</button>
+          <button type="button" className="primary" onClick={() => onJoin(invite.creator_id)}>
+            Connect<span className="btn-icon">{Icon.send}</span>
+          </button>
+          <button type="button" className="secondary" onClick={onCancel}>Decline</button>
         </div>
+        <p className="invite-encrypted">{Icon.lock} End-to-end encrypted — the server never reads your messages</p>
       </div>
     </div>
   )
