@@ -385,9 +385,15 @@ export function useChat(name: string, username: string) {
 
     setup()
 
+    // socket.io already retries on a backoff timer, but don't make the user
+    // wait out that timer once the browser itself says the network is back.
+    const onBrowserOnline = () => { if (!socket.connected) socket.connect() }
+    window.addEventListener('online', onBrowserOnline)
+
     return () => {
       alive = false
       typingTimers.current.forEach(clearTimeout)
+      window.removeEventListener('online', onBrowserOnline)
       socket.disconnect()
     }
   }, [name]) // eslint-disable-line react-hooks/exhaustive-deps

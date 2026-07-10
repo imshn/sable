@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject, type FormEvent } from 'rea
 import type { Socket } from 'socket.io-client'
 import { useChat } from './useChat.ts'
 import { useCall, type OnLog } from './useCall.ts'
+import { useOnlineStatus } from './useOnlineStatus.ts'
 import { Icon } from './icons.tsx'
 import { Thread, callLogText, Linkified } from './Thread.tsx'
 import { ContactsPage } from './ContactsPage.tsx'
@@ -890,6 +891,28 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
     const t = setTimeout(() => dismissAnnouncement(), 8000)
     return () => clearTimeout(t)
   }, [announcement, dismissAnnouncement])
+
+  // Two independent signals: the browser's own network status, and whether
+  // our socket is actually connected (server could be unreachable even with
+  // a live network interface). Either one being bad means actions won't go
+  // through, so the banner covers both — with a brief "back online" toast
+  // once both recover, instead of the banner just silently vanishing.
+  const isOnline = useOnlineStatus()
+  const hadTrouble = useRef(false)
+  const [justReconnected, setJustReconnected] = useState(false)
+  const networkTrouble = !isOnline || !connected
+  useEffect(() => {
+    if (networkTrouble) {
+      hadTrouble.current = true
+      return
+    }
+    if (!hadTrouble.current) return
+    hadTrouble.current = false
+    setJustReconnected(true)
+    const t = setTimeout(() => setJustReconnected(false), 2500)
+    return () => clearTimeout(t)
+  }, [networkTrouble])
+
   const onLog: OnLog = (target, log) => addLocalEntry(target, { t: 'call', ...log } as unknown as ConvoMessage['body'], 'call')
   const {
     call, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, micsOff, quality, lowBandwidth,
@@ -972,7 +995,19 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
   const callTargetId = call.groupId ?? call.peerId ?? ''
 
   return (
-    <div className={`shell ${activeId ? 'thread-open' : ''}`}>
+    <div className="app-shell-wrap">
+      {networkTrouble && (
+        <div className="network-banner" role="status">
+          {Icon.wifiOff}
+          {!isOnline ? "You're offline — messages will send once you're back online." : 'Reconnecting…'}
+        </div>
+      )}
+      {!networkTrouble && justReconnected && (
+        <div className="network-banner back-online" role="status">
+          {Icon.checkCircle} Back online
+        </div>
+      )}
+      <div className={`shell ${activeId ? 'thread-open' : ''}`}>
       <Sidebar
         name={name}
         rows={sidebarRows}
@@ -1082,6 +1117,7 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
           </section>
         )}
       </main>
+      </div>
 
       {creatingGroup && (
         <NewGroupModal contacts={contacts.filter(c => c.status === 'accepted')} onCreate={createGroup} onClose={() => setCreatingGroup(false)} />
