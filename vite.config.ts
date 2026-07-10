@@ -10,7 +10,11 @@ export default defineConfig({
       '/turn': { target: 'http://localhost:3001' },
       '/api': { target: 'http://localhost:3001' },
       '/vapid-key': { target: 'http://localhost:3001' },
-      '/admin/stats': { target: 'http://localhost:3001' },
+      '/config': { target: 'http://localhost:3001' },
+      // note the trailing slash+content requirement — a bare "/admin" is the
+      // client-side dashboard *route* (served by the SPA), only "/admin/..."
+      // sub-paths are the backend API
+      '^/admin/.+': { target: 'http://localhost:3001' },
     },
   },
 })

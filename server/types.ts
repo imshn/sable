@@ -76,6 +76,7 @@ export interface UserRow {
   created_at?: number | null
   updated_at?: number | null
   last_seen: number
+  suspended?: number
 }
 
 export interface ContactRow {
@@ -204,5 +205,5 @@ export interface ConnectionCtx {
   myPub: () => string
   getContact: (fromId: string, toId: string) => Promise<ContactRow | null>
   getContactsWithPresence: (userId: string) => Promise<ContactWithPresence[]>
-  establishSession: (args: { id: string; cleanName: string; cleanUsername: string; pubKey: object }) => Promise<void>
+  establishSession: (args: { id: string; cleanName: string; cleanUsername: string; pubKey: object; via?: 'passkey' | 'passwordless' }) => Promise<void>
 }

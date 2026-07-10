@@ -156,7 +156,49 @@ export async function migrate(): Promise<void> {
       video INTEGER NOT NULL DEFAULT 1,
       ts INTEGER NOT NULL
     )`,
-    `CREATE INDEX IF NOT EXISTS idx_call_logs_ts ON call_logs(ts)`
+    `CREATE INDEX IF NOT EXISTS idx_call_logs_ts ON call_logs(ts)`,
+    // Push delivery attempts — for the notification-analytics section only;
+    // sendPush already decides ok/expired, this just keeps a record of it.
+    `CREATE TABLE IF NOT EXISTS push_log (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      tag TEXT,
+      ok INTEGER NOT NULL,
+      expired INTEGER NOT NULL DEFAULT 0,
+      ts INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_push_log_ts ON push_log(ts)`,
+    // Failed auth attempts (username taken, expired/rejected passkey ceremony)
+    // — the security-dashboard signal analogous to what "JWT errors" would be
+    // in a token-based app; this one has no tokens, so this is the real one.
+    `CREATE TABLE IF NOT EXISTS failed_logins (
+      id TEXT PRIMARY KEY,
+      client_id TEXT,
+      ip TEXT,
+      reason TEXT NOT NULL,
+      ts INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_failed_logins_ts ON failed_logins(ts)`,
+    // Every mutating action taken from the admin panel itself.
+    `CREATE TABLE IF NOT EXISTS admin_audit_log (
+      id TEXT PRIMARY KEY,
+      action TEXT NOT NULL,
+      target TEXT,
+      detail TEXT,
+      ip TEXT,
+      ts INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON admin_audit_log(ts)`,
+    `CREATE TABLE IF NOT EXISTS feature_flags (
+      key TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      updated_at INTEGER NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS system_config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`
   ], 'write')
 
   // Safely add columns using a helper that swallows "column already exists" errors
@@ -165,6 +207,14 @@ export async function migrate(): Promise<void> {
   await addCol("ALTER TABLE users ADD COLUMN avatar TEXT")
   await addCol("ALTER TABLE users ADD COLUMN bio TEXT")
   await addCol("ALTER TABLE users ADD COLUMN created_at INTEGER")
+  await addCol("ALTER TABLE users ADD COLUMN suspended INTEGER NOT NULL DEFAULT 0")
+  await addCol("ALTER TABLE user_sessions ADD COLUMN via TEXT NOT NULL DEFAULT 'passwordless'")
+  await addCol("ALTER TABLE call_logs ADD COLUMN status TEXT NOT NULL DEFAULT 'ringing'")
+  await addCol("ALTER TABLE call_logs ADD COLUMN answered_at INTEGER")
+  await addCol("ALTER TABLE call_logs ADD COLUMN ended_at INTEGER")
+  await addCol("ALTER TABLE call_logs ADD COLUMN relay TEXT")
+  await addCol("ALTER TABLE user_reports ADD COLUMN resolved INTEGER NOT NULL DEFAULT 0")
+  await addCol("ALTER TABLE invitations ADD COLUMN used_at INTEGER")
   await addCol("ALTER TABLE users ADD COLUMN updated_at INTEGER")
   await addCol("ALTER TABLE users ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
   await addCol("ALTER TABLE privacy_settings ADD COLUMN bio_privacy TEXT NOT NULL DEFAULT 'everyone'")
@@ -174,6 +224,19 @@ export async function migrate(): Promise<void> {
   // Fallback for existing users and index
   await db.execute("UPDATE users SET username = 'user_' || substr(id, 1, 6) WHERE username IS NULL")
   await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+
+  // Seed defaults — INSERT OR IGNORE so an operator's saved change is never
+  // clobbered by a redeploy re-running this.
+  const now = Date.now()
+  for (const key of ['voice_calls', 'video_calls', 'screen_share', 'push_notifications', 'groups', 'registration']) {
+    await db.execute({ sql: `INSERT OR IGNORE INTO feature_flags (key, enabled, updated_at) VALUES (?, 1, ?)`, args: [key, now] })
+  }
+  for (const [key, value] of Object.entries({
+    max_upload_mb: '25', max_group_participants: '32', invite_expiry_hours: '168',
+    session_timeout_hours: '720', push_retry_count: '2',
+  })) {
+    await db.execute({ sql: `INSERT OR IGNORE INTO system_config (key, value, updated_at) VALUES (?, ?, ?)`, args: [key, value, now] })
+  }
 
   console.log('turso: migrated')
 }
@@ -223,7 +286,7 @@ export const store = {
 
   getUser: async (id: string): Promise<UserRow | null> => {
     if (!db) return null
-    const r = await db.execute({ sql: `SELECT id, name, username, bio, avatar, pubkey, created_at, updated_at, last_seen FROM users WHERE id=? AND deleted=0`, args: [id] })
+    const r = await db.execute({ sql: `SELECT id, name, username, bio, avatar, pubkey, created_at, updated_at, last_seen, suspended FROM users WHERE id=? AND deleted=0`, args: [id] })
     return (r.rows[0] as unknown as UserRow) || null
   },
 
@@ -327,6 +390,9 @@ export const store = {
       args: [id, code, creatorId, Date.now(), expiresAt]
     })),
 
+  markInviteUsed: (code: string) =>
+    db && safe(db.execute({ sql: `UPDATE invitations SET used_at=? WHERE code=? AND used_at IS NULL`, args: [Date.now(), code] })),
+
   getInvite: async (code: string): Promise<InviteRow | null> => {
     if (!db) return null
     const r = await db.execute({
@@ -377,9 +443,45 @@ export const store = {
 
   logCall: (id: string, caller: string, callee: string | null, groupId: string | null, video: boolean) =>
     db && safe(db.execute({
-      sql: `INSERT INTO call_logs (id, caller, callee, group_id, video, ts) VALUES (?, ?, ?, ?, ?, ?)`,
+      sql: `INSERT INTO call_logs (id, caller, callee, group_id, video, ts, status) VALUES (?, ?, ?, ?, ?, ?, 'ringing')`,
       args: [id, caller, callee, groupId, video ? 1 : 0, Date.now()],
     })),
+
+  // Most recent still-open (not ended) 1:1 call between this pair, in either
+  // direction — used to correlate answer/decline/end back to the offer
+  // without needing the client to carry an explicit call id.
+  findOpenCall: async (a: string, b: string): Promise<{ id: string; status: string } | null> => {
+    if (!db) return null
+    const r = await db.execute({
+      sql: `SELECT id, status FROM call_logs
+            WHERE group_id IS NULL AND status != 'ended'
+              AND ((caller=? AND callee=?) OR (caller=? AND callee=?))
+            ORDER BY ts DESC LIMIT 1`,
+      args: [a, b, b, a],
+    })
+    return r.rows[0] ? { id: String(r.rows[0].id), status: String(r.rows[0].status) } : null
+  },
+
+  findOpenGroupCall: async (groupId: string): Promise<{ id: string } | null> => {
+    if (!db) return null
+    const r = await db.execute({
+      sql: `SELECT id FROM call_logs WHERE group_id=? AND status != 'ended' ORDER BY ts DESC LIMIT 1`,
+      args: [groupId],
+    })
+    return r.rows[0] ? { id: String(r.rows[0].id) } : null
+  },
+
+  // Guarded to only fire on the true first answer — an ICE restart also
+  // sends a plain call-answer with no way to tell it apart from the outside,
+  // and re-stamping answered_at on every restart would skew duration.
+  markCallAnswered: (id: string) =>
+    db && safe(db.execute({ sql: `UPDATE call_logs SET status='answered', answered_at=? WHERE id=? AND status='ringing'`, args: [Date.now(), id] })),
+
+  endCall: (id: string, outcome: 'completed' | 'missed' | 'declined') =>
+    db && safe(db.execute({ sql: `UPDATE call_logs SET status=?, ended_at=? WHERE id=?`, args: [outcome, Date.now(), id] })),
+
+  setCallRelay: (id: string, relay: 'p2p' | 'turn') =>
+    db && safe(db.execute({ sql: `UPDATE call_logs SET relay=? WHERE id=? AND relay IS NULL`, args: [relay, id] })),
 
   markDelivered: (id: string, recipient: string) =>
     db && safe(db.execute({ sql: `UPDATE messages SET delivered=1 WHERE id=? AND recipient=?`, args: [id, recipient] })),
@@ -481,6 +583,9 @@ export const store = {
       args: [id, reporterId, reportedId, category, details || null, Date.now()]
     })),
 
+  resolveReport: (id: string) =>
+    db && safe(db.execute({ sql: `UPDATE user_reports SET resolved=1 WHERE id=?`, args: [id] })),
+
   // ---- Notification Preferences ----
   getNotificationPrefs: async (userId: string): Promise<NotificationPrefsRow> => {
     const fallback: NotificationPrefsRow = { user_id: userId, messages: 1, calls: 1, contact_requests: 1, mentions: 1, group_activity: 1, announcements: 1 }
@@ -501,11 +606,11 @@ export const store = {
     })),
 
   // ---- Sessions ----
-  createSession: (id: string, userId: string, socketId: string, ip: string | null, userAgent: string | null, deviceHint: string | null) =>
+  createSession: (id: string, userId: string, socketId: string, ip: string | null, userAgent: string | null, deviceHint: string | null, via: 'passkey' | 'passwordless' = 'passwordless') =>
     db && safe(db.execute({
-      sql: `INSERT INTO user_sessions (id, user_id, socket_id, ip, user_agent, device_hint, logged_in_at, last_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [id, userId, socketId, ip || null, userAgent || null, deviceHint || null, Date.now(), Date.now()]
+      sql: `INSERT INTO user_sessions (id, user_id, socket_id, ip, user_agent, device_hint, logged_in_at, last_active, via)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [id, userId, socketId, ip || null, userAgent || null, deviceHint || null, Date.now(), Date.now(), via]
     })),
 
   touchSession: (sessionId: string) =>
@@ -596,4 +701,87 @@ export const store = {
 
   deletePushSubscription: (endpoint: string) =>
     db && safe(db.execute({ sql: `DELETE FROM push_subscriptions WHERE endpoint=?`, args: [endpoint] })),
+
+  // ---- Push delivery log (notification analytics) ----
+  logPush: (id: string, userId: string, tag: string | undefined, ok: boolean, expired: boolean) =>
+    db && safe(db.execute({
+      sql: `INSERT INTO push_log (id, user_id, tag, ok, expired, ts) VALUES (?, ?, ?, ?, ?, ?)`,
+      args: [id, userId, tag || null, ok ? 1 : 0, expired ? 1 : 0, Date.now()],
+    })),
+
+  // ---- Failed logins (security dashboard) ----
+  logFailedLogin: (id: string, clientId: string | null, ip: string | null, reason: string) =>
+    db && safe(db.execute({
+      sql: `INSERT INTO failed_logins (id, client_id, ip, reason, ts) VALUES (?, ?, ?, ?, ?)`,
+      args: [id, clientId, ip, reason, Date.now()],
+    })),
+
+  countRecentFailedLogins: async (ip: string, sinceMs: number): Promise<number> => {
+    if (!db || !ip) return 0
+    const r = await db.execute({ sql: `SELECT COUNT(*) c FROM failed_logins WHERE ip=? AND ts > ?`, args: [ip, Date.now() - sinceMs] })
+    return Number(r.rows[0]?.c ?? 0)
+  },
+
+  suspiciousIps: async (sinceMs = 3_600_000, minFails = 3): Promise<{ ip: string; count: number }[]> => {
+    if (!db) return []
+    const r = await db.execute({
+      sql: `SELECT ip, COUNT(*) c FROM failed_logins WHERE ts > ? AND ip IS NOT NULL GROUP BY ip HAVING c >= ? ORDER BY c DESC LIMIT 20`,
+      args: [Date.now() - sinceMs, minFails],
+    })
+    return r.rows.map((row) => ({ ip: String(row.ip), count: Number(row.c) }))
+  },
+
+  // ---- Admin audit log ----
+  logAdminAction: (id: string, action: string, target: string | null, detail: string | null, ip: string | null) =>
+    db && safe(db.execute({
+      sql: `INSERT INTO admin_audit_log (id, action, target, detail, ip, ts) VALUES (?, ?, ?, ?, ?, ?)`,
+      args: [id, action, target, detail, ip, Date.now()],
+    })),
+
+  getAuditLog: async (limit = 100): Promise<{ id: string; action: string; target: string | null; detail: string | null; ip: string | null; ts: number }[]> => {
+    if (!db) return []
+    const r = await db.execute({ sql: `SELECT * FROM admin_audit_log ORDER BY ts DESC LIMIT ?`, args: [limit] })
+    return r.rows.map((row) => ({
+      id: String(row.id), action: String(row.action), target: row.target as string | null,
+      detail: row.detail as string | null, ip: row.ip as string | null, ts: Number(row.ts),
+    }))
+  },
+
+  // ---- Feature flags ----
+  getFeatureFlags: async (): Promise<Record<string, boolean>> => {
+    if (!db) return {}
+    const r = await db.execute(`SELECT key, enabled FROM feature_flags`)
+    return Object.fromEntries(r.rows.map((row) => [row.key, !!row.enabled]))
+  },
+
+  setFeatureFlag: (key: string, enabled: boolean) =>
+    db && safe(db.execute({
+      sql: `INSERT INTO feature_flags (key, enabled, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET enabled=excluded.enabled, updated_at=excluded.updated_at`,
+      args: [key, enabled ? 1 : 0, Date.now()],
+    })),
+
+  // ---- System config ----
+  getSystemConfig: async (): Promise<Record<string, string>> => {
+    if (!db) return {}
+    const r = await db.execute(`SELECT key, value FROM system_config`)
+    return Object.fromEntries(r.rows.map((row) => [row.key, String(row.value)]))
+  },
+
+  setSystemConfig: (key: string, value: string) =>
+    db && safe(db.execute({
+      sql: `INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+      args: [key, value, Date.now()],
+    })),
+
+  // ---- Moderation: suspend ----
+  setSuspended: (userId: string, suspended: boolean) =>
+    db && safe(db.execute({ sql: `UPDATE users SET suspended=? WHERE id=?`, args: [suspended ? 1 : 0, userId] })),
+
+  isSuspended: async (userId: string): Promise<boolean> => {
+    if (!db) return false
+    const r = await db.execute({ sql: `SELECT suspended FROM users WHERE id=?`, args: [userId] })
+    return !!r.rows[0]?.suspended
+  },
 }

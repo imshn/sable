@@ -1049,6 +1049,7 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
             connected={connected}
             onJoin={(userId) => {
               sendContactRequest(userId)
+              socketRef.current?.emit('invite-used', { code: inviteCode })
               setInviteCode(null)
               window.history.pushState({}, '', '/')
             }}

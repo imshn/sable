@@ -87,6 +87,7 @@ export function useCall(socketRef: RefObject<Socket | null>, connected: boolean,
   const restartAttempts = useRef(new Map<string, number>())
   const statsPrev = useRef(new Map<string, { lost: number; received: number; bytes: number; ts: number }>())
   const lowBwStreak = useRef(0)
+  const reportedRelay = useRef(new Set<string>())
 
   const pcs = useRef(new Map<string, RTCPeerConnection>())
   const pendingIce = useRef(new Map<string, RTCIceCandidateInit[]>())
@@ -128,8 +129,19 @@ export function useCall(socketRef: RefObject<Socket | null>, connected: boolean,
         let received = 0
         let bytes = 0
         stats.forEach((s) => {
-          if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded' && s.currentRoundTripTime != null) {
-            rtt = s.currentRoundTripTime * 1000
+          if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') {
+            if (s.currentRoundTripTime != null) rtt = s.currentRoundTripTime * 1000
+            // analytics only: which candidate type won, reported once per
+            // call so the admin dashboard can show TURN-vs-direct usage —
+            // doesn't affect the connection itself, just reads one more
+            // field off stats already being polled for quality.
+            if (!reportedRelay.current.has(peerId)) {
+              const local = stats.get(s.localCandidateId)
+              if (local?.candidateType) {
+                reportedRelay.current.add(peerId)
+                socketRef.current?.emit('call-relay-info', { to: peerId, relay: local.candidateType === 'relay' ? 'turn' : 'p2p' })
+              }
+            }
           }
           if (s.type === 'inbound-rtp') {
             lost += s.packetsLost ?? 0
@@ -190,6 +202,7 @@ export function useCall(socketRef: RefObject<Socket | null>, connected: boolean,
     setLowBandwidth(false)
     restartAttempts.current.clear()
     statsPrev.current.clear()
+    reportedRelay.current.clear()
     lowBwStreak.current = 0
     setCall({ status: 'idle' })
   }, [])

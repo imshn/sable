@@ -4,12 +4,13 @@ import { Icon } from './icons.tsx'
 import { b64encode } from './crypto.ts'
 import { ConfirmModal } from './ConfirmModal.tsx'
 import { ReportModal } from './ReportModal.tsx'
+import { runtimeConfig } from './runtimeConfig.ts'
 import type { ChatTarget, Convo, ConvoMessage, CallLogBody, FileBody, GroupMember, MentionRef, MessageBody, OutgoingEnvelope, ReplyRef } from './types.ts'
 
 const timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
 const initials = (n: string) => n.trim().slice(0, 2).toUpperCase()
 const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
-const MAX_FILE = 15 * 1024 * 1024
+const maxFileBytes = () => runtimeConfig.maxUploadMb * 1024 * 1024
 
 const fmtSize = (bytes: number) => {
   if (bytes < 1024) return `${bytes} B`
@@ -826,8 +827,8 @@ function Composer({ target, onSend, onTyping, onPickFiles }: ComposerProps) {
 
   const sendFiles = (files: FileList | File[]) => {
     const ok = [...files].slice(0, 5).filter((f) => {
-      if (f.size > MAX_FILE) {
-        flash(`${f.name} is over 15 MB`)
+      if (f.size > maxFileBytes()) {
+        flash(`${f.name} is over ${runtimeConfig.maxUploadMb} MB`)
         return false
       }
       return true
@@ -1064,7 +1065,7 @@ export function Thread({
   const mediaList = messages.filter(isMedia)
 
   const queueFiles = (files: FileList | File[]) =>
-    setPending((q) => [...q, ...[...files].filter((f) => f.size <= MAX_FILE).slice(0, 5)])
+    setPending((q) => [...q, ...[...files].filter((f) => f.size <= maxFileBytes()).slice(0, 5)])
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault()

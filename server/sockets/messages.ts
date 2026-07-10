@@ -3,6 +3,7 @@ import { store } from '../db.js'
 import { online, known, privacyCache } from '../state.js'
 import { privacyAllows } from '../helpers.js'
 import { notifyIfNotViewing } from '../notify.js'
+import { recordMessage } from '../metrics.js'
 import type { AppSocket, ConnectionCtx } from '../types.js'
 
 interface EncryptedPayloadArg {
@@ -38,6 +39,7 @@ export function registerMessages(socket: AppSocket, ctx: ConnectionCtx): void {
       store.saveMessage(id, to, from, myPub(), null, JSON.stringify(payload), ts, false)
     }
     if (selfPayload) store.saveMessage(id, from, from, myPub(), null, JSON.stringify(selfPayload), ts, true)
+    recordMessage()
   })
 
   socket.on('delivered', ({ to, msgId }: { to: string; msgId: string }) => {

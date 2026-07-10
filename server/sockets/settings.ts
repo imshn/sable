@@ -6,6 +6,7 @@ import {
   makeAuthenticationOptions, checkAuthentication, toB64,
 } from '../webauthn.js'
 import { online, known, privacyCache, webauthnChallenges } from '../state.js'
+import { configNumber } from '../flags.js'
 import type { AppSocket, ConnectionCtx, PrivacyLevel, PasskeySummary, PasskeyCredentialRow } from '../types.js'
 
 const passkeySummary = (rows: PasskeyCredentialRow[]): PasskeySummary[] =>
@@ -42,17 +43,26 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
     const expectedChallenge = freshChallenge(id)
     if (!expectedChallenge) { cb({ ok: false, error: 'This login attempt expired — try again' }); return }
     const passkeyRow = await store.getPasskeyByCredentialId(response?.id)
-    if (!passkeyRow || passkeyRow.user_id !== id) { cb({ ok: false, error: 'Unrecognized passkey' }); return }
+    if (!passkeyRow || passkeyRow.user_id !== id) {
+      store.logFailedLogin(randomUUID(), id, ctx.ip, 'passkey_unrecognized')
+      cb({ ok: false, error: 'Unrecognized passkey' })
+      return
+    }
 
     let verification
     try {
       verification = await checkAuthentication(response, expectedChallenge, passkeyRow)
     } catch {
+      store.logFailedLogin(randomUUID(), id, ctx.ip, 'passkey_verify_error')
       cb({ ok: false, error: 'Passkey verification failed' })
       return
     }
     webauthnChallenges.delete(id)
-    if (!verification.verified) { cb({ ok: false, error: 'Passkey verification failed' }); return }
+    if (!verification.verified) {
+      store.logFailedLogin(randomUUID(), id, ctx.ip, 'passkey_rejected')
+      cb({ ok: false, error: 'Passkey verification failed' })
+      return
+    }
 
     store.updatePasskeyCounter(passkeyRow.credential_id, verification.authenticationInfo.newCounter)
     socket.data.passkeyVerified = true
@@ -61,6 +71,7 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
       cleanName: (name || '').trim().slice(0, 32) || id,
       cleanUsername: (username || '').trim().toLowerCase().slice(0, 32) || id,
       pubKey,
+      via: 'passkey',
     })
     cb({ ok: true })
   })
@@ -160,7 +171,8 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
     const from = clientId()
     if (!from) { cb?.(false); return }
     const code = randomUUID().split('-')[0]
-    const expiresAt = options?.expiresIn ? Date.now() + options.expiresIn : null
+    const expiresIn = options?.expiresIn ?? configNumber('invite_expiry_hours', 168) * 3_600_000
+    const expiresAt = expiresIn > 0 ? Date.now() + expiresIn : null
     store.createInvite(randomUUID(), code, from, expiresAt)
     socket.emit('invite-created', { code, expiresAt })
     cb?.(true)
@@ -172,6 +184,12 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
     if (!invite) { callback({ error: 'Invite not found' }); return }
     if (invite.expires_at && invite.expires_at < Date.now()) { callback({ error: 'Invite expired' }); return }
     callback({ invite })
+  })
+
+  // fired when the visitor actually hits "Connect", not just when the
+  // landing page loads — that's what makes "invite acceptance rate" real
+  socket.on('invite-used', ({ code }: { code: string }) => {
+    if (typeof code === 'string' && code) store.markInviteUsed(code)
   })
 
   // ---- privacy settings ----

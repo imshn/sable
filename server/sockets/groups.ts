@@ -4,14 +4,24 @@ import { store } from '../db.js'
 import { online, known, groups } from '../state.js'
 import { groupInfo, emitToMembers } from '../helpers.js'
 import { notifyOffline, notifyIfNotViewing } from '../notify.js'
+import { flagEnabled, configNumber } from '../flags.js'
+import { recordMessage, recordCall } from '../metrics.js'
 import type { AppSocket, ConnectionCtx } from '../types.js'
+
+// groupId -> ids currently in the mesh call, purely to know when a group
+// call analytics row should close (last participant leaving) — not the
+// group's chat roster, which lives in `groups` from state.ts.
+const activeGroupCallers = new Map<string, Set<string>>()
 
 export function registerGroups(socket: AppSocket, ctx: ConnectionCtx): void {
   const { clientId, myPub } = ctx
 
   socket.on('group-create', ({ name, members }: { name: string; members: string[] }, cb?: (ok: boolean) => void) => {
     const from = clientId()
+    if (!flagEnabled('groups')) { cb?.(false); return }
     if (!from || typeof name !== 'string' || !name.trim() || !Array.isArray(members)) { cb?.(false); return }
+    const maxParticipants = configNumber('max_group_participants', 32)
+    if (members.length + 1 > maxParticipants) { cb?.(false); return }
     const id = `g-${randomUUID()}`
     const all = new Set([from, ...members.filter((m) => known.has(m) || online.has(m))])
     if (all.size < 2) { cb?.(false); return }
@@ -111,6 +121,7 @@ export function registerGroups(socket: AppSocket, ctx: ConnectionCtx): void {
       }
       store.saveMessage(id, memberId, from, myPub(), groupId, JSON.stringify(payload), ts, !!u)
     }
+    recordMessage()
   })
 
   socket.on('gtyping', ({ groupId }: { groupId: string }) => {
@@ -120,10 +131,11 @@ export function registerGroups(socket: AppSocket, ctx: ConnectionCtx): void {
   })
 
   for (const ev of ['gcall-ring', 'gcall-join', 'gcall-leave']) {
-    socket.on(ev, ({ groupId, to }: { groupId: string; to?: string }) => {
+    socket.on(ev, async ({ groupId, to }: { groupId: string; to?: string }) => {
       const from = clientId()
       const g = groups.get(groupId)
       if (!from || !g?.members.has(from)) return
+      if ((ev === 'gcall-ring' || ev === 'gcall-join') && !flagEnabled('video_calls')) return
       const data = { groupId, from, name: online.get(from)?.name }
       if (ev === 'gcall-ring' && to) {
         if (!g.members.has(to)) return
@@ -131,9 +143,27 @@ export function registerGroups(socket: AppSocket, ctx: ConnectionCtx): void {
         if (u) io.to(u.socketId).emit(ev, data)
         return
       }
-      // analytics: a ring with no `to` is someone starting a group call
-      // (targeted rings are mid-call invites); group calls are always video
-      if (ev === 'gcall-ring') store.logCall(randomUUID(), from, null, groupId, true)
+
+      const participants = activeGroupCallers.get(groupId) ?? new Set<string>()
+      activeGroupCallers.set(groupId, participants)
+      if (ev === 'gcall-ring') {
+        // analytics: a ring with no `to` starts a group call (targeted rings
+        // are mid-call invites); group calls are always video
+        store.logCall(randomUUID(), from, null, groupId, true)
+        recordCall()
+        participants.add(from)
+      } else if (ev === 'gcall-join') {
+        const open = await store.findOpenGroupCall(groupId)
+        if (open) store.markCallAnswered(open.id)
+        participants.add(from)
+      } else {
+        participants.delete(from)
+        if (participants.size === 0) {
+          const open = await store.findOpenGroupCall(groupId)
+          if (open) store.endCall(open.id, 'completed')
+          activeGroupCallers.delete(groupId)
+        }
+      }
       emitToMembers(groupId, ev, data, from)
     })
   }

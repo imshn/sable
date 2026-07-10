@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto'
 import { io } from './io.js'
 import { store } from './db.js'
 import { sendPush } from './push.js'
 import { online, privacyCache } from './state.js'
 import { privacyAllows } from './helpers.js'
+import { flagEnabled } from './flags.js'
 import type { PushPayload, NotificationPrefsRow } from './types.js'
 
 // ------------------------------------------------------------------
@@ -35,11 +37,13 @@ export const notifyPresence = async (userId: string, onlineState: boolean, lastS
 }
 
 async function pushToSubscriptions(userId: string, prefKey: keyof NotificationPrefsRow, payload: PushPayload): Promise<void> {
+  if (!flagEnabled('push_notifications')) return
   const prefs = await store.getNotificationPrefs(userId)
   if (prefs && prefs[prefKey] === 0) return
   const subs = await store.getPushSubscriptions(userId)
   for (const sub of subs) {
     const result = await sendPush(sub, payload)
+    store.logPush(randomUUID(), userId, payload.tag, result.ok, !!result.expired)
     if (result.expired) store.deletePushSubscription(sub.endpoint)
   }
 }

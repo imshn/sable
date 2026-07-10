@@ -6,6 +6,8 @@ import { vapidPublicKey } from './push.js'
 import { turnServers, metaTags, decodeEntities } from './helpers.js'
 import { broadcastAnnouncement } from './notify.js'
 import { registerAdmin } from './admin.js'
+import { flags, config } from './flags.js'
+import { recordRequest } from './metrics.js'
 
 const BOOT_ID = randomUUID().slice(0, 8)
 
@@ -13,6 +15,16 @@ export function createHttpApp(): Express {
   const app = express()
   app.use(cors({ origin: true }))
   app.use(express.json())
+  app.use((req, res, next) => {
+    const start = process.hrtime.bigint()
+    res.on('finish', () => {
+      const ms = Number(process.hrtime.bigint() - start) / 1e6
+      // group by route pattern, not raw path, so /api/search?q=x doesn't
+      // fragment into one bucket per query
+      recordRequest(req.route?.path ? `${req.baseUrl}${req.route.path}` : req.path.split('?')[0], ms, res.statusCode)
+    })
+    next()
+  })
   registerAdmin(app)
 
   app.get('/healthz', (_req, res) => {
@@ -25,6 +37,17 @@ export function createHttpApp(): Express {
 
   app.get('/vapid-key', (_req, res) => {
     res.json({ publicKey: vapidPublicKey })
+  })
+
+  // Public, non-sensitive runtime config — feature kill switches and the
+  // handful of limits the client itself needs to enforce (session_timeout
+  // and push_retry_count are server-only concerns, left out on purpose).
+  app.get('/config', (_req, res) => {
+    res.json({
+      flags,
+      maxUploadMb: Number(config.max_upload_mb) || 25,
+      maxGroupParticipants: Number(config.max_group_participants) || 32,
+    })
   })
 
   app.get('/api/search', async (req, res) => {

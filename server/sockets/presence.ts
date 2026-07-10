@@ -4,6 +4,7 @@ import { store } from '../db.js'
 import { online, known, groups, privacyCache } from '../state.js'
 import { parseDeviceHint, groupInfo } from '../helpers.js'
 import { notifyPresence } from '../notify.js'
+import { flagEnabled } from '../flags.js'
 import type { AppSocket, ConnectionCtx, ContactRow, ContactWithPresence } from '../types.js'
 
 // Connection lifecycle: builds the shared per-connection ctx (clientId,
@@ -34,7 +35,7 @@ export function registerPresence(socket: AppSocket): ConnectionCtx {
 
   // Shared by plain login and passkey-verified login: creates the session
   // record, warms caches, and sends the initial state batch.
-  const establishSession = async ({ id, cleanName, cleanUsername, pubKey }: { id: string; cleanName: string; cleanUsername: string; pubKey: object }) => {
+  const establishSession = async ({ id, cleanName, cleanUsername, pubKey, via = 'passwordless' }: { id: string; cleanName: string; cleanUsername: string; pubKey: object; via?: 'passkey' | 'passwordless' }) => {
     const prev = online.get(id)
     if (prev && prev.socketId !== socket.id) {
       const old = io.sockets.sockets.get(prev.socketId)
@@ -46,7 +47,7 @@ export function registerPresence(socket: AppSocket): ConnectionCtx {
     const sessionId = randomUUID()
     socket.data.clientId = id
     socket.data.sessionId = sessionId
-    store.createSession(sessionId, id, socket.id, ip, ua, deviceHint)
+    store.createSession(sessionId, id, socket.id, ip, ua, deviceHint, via)
 
     online.set(id, { socketId: socket.id, name: cleanName, username: cleanUsername, pubKey, sessionId })
     known.set(id, { name: cleanName, username: cleanUsername, pubKey, lastSeen: Date.now() })
@@ -96,12 +97,35 @@ export function registerPresence(socket: AppSocket): ConnectionCtx {
   // ---- hello (auth + session creation) ----
   socket.on('hello', async ({ id, name, username, pubKey }: { id: string; name: string; username?: string; pubKey: object }) => {
     if (typeof id !== 'string' || !id || typeof name !== 'string' || !name.trim() || !pubKey) return
+
+    // 10+ failed attempts from this IP in 10 minutes: stop even trying —
+    // the security dashboard's "blocked IPs" reflects this, not just a label
+    if (await store.countRecentFailedLogins(ip, 600_000) >= 10) {
+      socket.emit('auth-error', 'Too many attempts — try again later')
+      return
+    }
+
     const cleanName = name.trim().slice(0, 32)
     const cleanUsername = typeof username === 'string' ? username.trim().toLowerCase().slice(0, 32) : `user_${id.slice(0, 6)}`
+
+    const existingUser = await store.getUser(id)
+
+    if (!existingUser && !flagEnabled('registration')) {
+      socket.emit('auth-error', 'New sign-ups are temporarily disabled')
+      store.logFailedLogin(randomUUID(), id, ip, 'registration_disabled')
+      return
+    }
+
+    if (existingUser?.suspended) {
+      socket.emit('auth-error', 'This account has been suspended')
+      store.logFailedLogin(randomUUID(), id, ip, 'suspended')
+      return
+    }
 
     const isAvailable = await store.checkUsernameAvailable(cleanUsername, id)
     if (!isAvailable) {
       socket.emit('auth-error', 'Username is already taken')
+      store.logFailedLogin(randomUUID(), id, ip, 'username_taken')
       return
     }
 

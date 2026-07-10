@@ -11,6 +11,8 @@ import { migrate, store } from './db.js'
 import { createHttpApp } from './http.js'
 import { initIo } from './io.js'
 import { known, groups } from './state.js'
+import { loadFlags } from './flags.js'
+import { startAdminRealtime } from './realtime.js'
 import { registerPresence } from './sockets/presence.js'
 import { registerContacts } from './sockets/contacts.js'
 import { registerGroups } from './sockets/groups.js'
@@ -28,6 +30,7 @@ const httpServer = createServer(createHttpApp())
 const io = initIo(httpServer)
 
 await migrate()
+await loadFlags()
 for (const u of await store.allUsers()) {
   known.set(u.id, { name: u.name, username: u.username, pubKey: JSON.parse(u.pubkey), lastSeen: Number(u.last_seen) })
 }
@@ -44,5 +47,7 @@ io.on('connection', (socket: AppSocket) => {
   registerCalls(socket, ctx)
   registerSettings(socket, ctx)
 })
+
+startAdminRealtime()
 
 httpServer.listen(PORT, '0.0.0.0', () => console.log(`sable relay listening on :${PORT}`))
