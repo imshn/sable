@@ -2228,7 +2228,7 @@ video.media { width: min(320px, 62vw); }
 
 .contacts-filter {
   position: relative;
-  padding: 10px 12px 4px;
+  padding: 8px 12px;
 }
 
 .contacts-filter-icon {
@@ -2253,6 +2253,31 @@ video.media { width: min(320px, 62vw); }
 }
 
 .requests-section-head h3 { margin: 0; font-size: 0.95rem; color: var(--muted); }
+
+.requests-section-head.divider {
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+  padding-top: 20px;
+}
+
+.list-empty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.list-empty-icon {
+  display: flex;
+  flex-shrink: 0;
+  opacity: 0.55;
+}
+
+.list-empty-icon svg { width: 17px; height: 17px; }
+
+.contact-preview.status { font-style: italic; }
 
 /* profile detail pane (right side): selected contact/request/search result */
 .profile-detail {

@@ -15,11 +15,12 @@ interface RowProps {
   online?: boolean
   trailing?: ReactNode
   sub?: ReactNode
+  statusSub?: boolean
   active: boolean
   onClick: () => void
 }
 
-function Row({ id, name, username, online, trailing, sub, active, onClick }: RowProps) {
+function Row({ id, name, username, online, trailing, sub, statusSub, active, onClick }: RowProps) {
   return (
     <button type="button" className={`contact ${active ? 'active' : ''}`} onClick={onClick}>
       <span className="avatar-wrap">
@@ -34,7 +35,7 @@ function Row({ id, name, username, online, trailing, sub, active, onClick }: Row
           {trailing && <span className="contact-time">{trailing}</span>}
         </span>
         <span className="contact-bottom">
-          <span className="contact-preview">{sub ?? `@${username}`}</span>
+          <span className={`contact-preview ${statusSub ? 'status' : ''}`}>{sub ?? `@${username}`}</span>
         </span>
       </span>
     </button>
@@ -55,6 +56,18 @@ function EmptyState({ icon, title, hint, action }: EmptyStateProps) {
       <p>{title}</p>
       {hint && <p className="empty-sub">{hint}</p>}
       {action}
+    </div>
+  )
+}
+
+// Compact icon+text row for empty/loading states inside the narrow list
+// pane — the big EmptyState/.empty treatment above is for the wide detail
+// pane and reads as too heavy squeezed into a ~380px column.
+function ListEmpty({ icon, text }: { icon: ReactNode; text: string }) {
+  return (
+    <div className="list-empty">
+      <span className="list-empty-icon">{icon}</span>
+      {text}
     </div>
   )
 }
@@ -153,7 +166,7 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
       if (acceptedContacts.length === 0) {
         return (
           <div className="contacts-list-scroll">
-            <p className="empty-sub" style={{ textAlign: 'center', padding: '24px 16px' }}>No contacts yet.</p>
+            <ListEmpty icon={Icon.users} text="No contacts yet." />
           </div>
         )
       }
@@ -171,7 +184,7 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
           </div>
           <div className="contacts-list-scroll">
             {filteredContacts.length === 0 ? (
-              <p className="empty-sub" style={{ textAlign: 'center', padding: '24px 16px' }}>No contacts match "{filter}".</p>
+              <ListEmpty icon={Icon.search} text={`No contacts match "${filter}".`} />
             ) : (
               filteredContacts.map(c => (
                 <Row
@@ -199,22 +212,22 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
             {pendingRequests.length > 0 && <span className="session-badge">{pendingRequests.length}</span>}
           </div>
           {pendingRequests.length === 0 ? (
-            <p className="empty-sub" style={{ padding: '0 4px 16px' }}>No pending incoming requests.</p>
+            <ListEmpty icon={Icon.bell} text="No pending incoming requests." />
           ) : (
             pendingRequests.map(c => (
               <Row key={c.id} id={c.id} name={c.name} username={c.username} active={selectedId === c.id} onClick={() => setSelectedId(c.id)} />
             ))
           )}
 
-          <div className="requests-section-head" style={{ marginTop: '1.5rem' }}>
+          <div className="requests-section-head divider">
             <h3>Sent</h3>
             {sentRequests.length > 0 && <span className="session-badge">{sentRequests.length}</span>}
           </div>
           {sentRequests.length === 0 ? (
-            <p className="empty-sub" style={{ padding: '0 4px' }}>No pending sent requests.</p>
+            <ListEmpty icon={Icon.send} text="No pending sent requests." />
           ) : (
             sentRequests.map(c => (
-              <Row key={c.id} id={c.id} name={c.name} username={c.username} sub="Pending" active={selectedId === c.id} onClick={() => setSelectedId(c.id)} />
+              <Row key={c.id} id={c.id} name={c.name} username={c.username} sub="Pending" statusSub active={selectedId === c.id} onClick={() => setSelectedId(c.id)} />
             ))
           )}
         </div>
@@ -239,9 +252,9 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
           <p className="hint" style={{ padding: '8px 16px 0' }}>Type at least 2 characters.</p>
         )}
         <div className="contacts-list-scroll">
-          {isSearching && <p className="empty-sub" style={{ textAlign: 'center', padding: '24px 16px' }}>Searching…</p>}
+          {isSearching && <ListEmpty icon={Icon.search} text="Searching…" />}
           {!isSearching && searchResults.length === 0 && searchQuery.trim().length >= 2 && (
-            <p className="empty-sub" style={{ textAlign: 'center', padding: '24px 16px' }}>No users found.</p>
+            <ListEmpty icon={Icon.search} text="No users found." />
           )}
           {searchResults.map(u => {
             const existingContact = contacts.find(c => c.id === u.id)
@@ -251,7 +264,7 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
               : existingContact ? 'Blocked'
               : undefined
             return (
-              <Row key={u.id} id={u.id} name={u.name} username={u.username} sub={sub} active={selectedId === u.id} onClick={() => setSelectedId(u.id)} />
+              <Row key={u.id} id={u.id} name={u.name} username={u.username} sub={sub} statusSub={!!sub} active={selectedId === u.id} onClick={() => setSelectedId(u.id)} />
             )
           })}
         </div>
