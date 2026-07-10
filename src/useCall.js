@@ -568,6 +568,7 @@ export function useCall(socketRef, myId, onLog) {
 
   return {
     call, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, micsOff, quality, lowBandwidth,
+    activeSince,
     startCall, startGroupCall, accept, decline, hangup, toggleMic, toggleCam, toggleShare, inviteToCall,
   }
 }

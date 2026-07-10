@@ -1,21 +1,13 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { Icon } from './icons.jsx'
 import { ConfirmModal } from './ConfirmModal.jsx'
-
-// Deterministic per-person hue so avatars are easier to tell apart at a glance
-// in a long list, without needing real profile photos.
-const avatarHue = (seed) => {
-  let h = 0
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) % 360
-  return h
-}
+import { avatarBg } from './avatarColor.js'
 
 function PersonRow({ id, name, username, online, children }) {
-  const hue = avatarHue(id || name)
   return (
     <div className="contact-card-info">
       <span className="avatar-wrap">
-        <span className="avatar" style={{ background: `hsl(${hue} 55% 42%)`, color: '#fff' }}>
+        <span className="avatar" style={{ background: avatarBg(id || name), color: '#fff' }}>
           {name.slice(0, 2).toUpperCase()}
         </span>
         {online && <span className="status-dot on avatar-dot" aria-label="Online" />}

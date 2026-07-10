@@ -7,6 +7,7 @@ import { ContactsPage } from './ContactsPage.jsx'
 import { ProfileSettingsModal } from './ProfileSettingsModal.jsx'
 import { ConfirmModal } from './ConfirmModal.jsx'
 import { InvitePage } from './InvitePage.jsx'
+import { avatarBg } from './avatarColor.js'
 
 function useTheme() {
   const [theme, setTheme] = useState(() => localStorage.getItem('sable-theme') ?? 'dark')
@@ -269,7 +270,7 @@ function NewGroupModal({ contacts, onCreate, onClose }) {
 // window (~5s) lapses, which is how long ICE can take — the classic "call
 // connected but screen stays black". Fall back to muted playback + unmute pill.
 // When the video track goes dark (camera off), show the person instead of a void.
-function Video({ stream, muted, className, allowUnmute, label, personName, forceAvatar, isMicOff }) {
+function Video({ stream, muted, className, allowUnmute, label, personName, seed, forceAvatar, isMicOff }) {
   const ref = useRef(null)
   const [blocked, setBlocked] = useState(false)
   const [videoDark, setVideoDark] = useState(false)
@@ -308,11 +309,13 @@ function Video({ stream, muted, className, allowUnmute, label, personName, force
 
   const showAvatar = forceAvatar || videoDark
   return (
-    <div className={`video-wrap ${className ?? ''}`}>
+    <div className={`video-wrap ${className ?? ''} ${isMicOff ? 'mic-off' : ''}`}>
       <video ref={ref} autoPlay playsInline muted={muted} />
       {showAvatar && personName && (
         <div className="video-avatar">
-          <span className="avatar big-tile">{initials(personName)}</span>
+          <span className="avatar big-tile" style={{ background: avatarBg(seed ?? personName), color: '#fff', borderColor: 'transparent' }}>
+            {initials(personName)}
+          </span>
           <span className="video-avatar-name">{personName}</span>
         </div>
       )}
@@ -405,12 +408,28 @@ function QualityPill({ quality }) {
 }
 
 function CallOverlay({
-  call, title, names, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, micsOff, quality, lowBandwidth,
-  onToggleMic, onToggleCam, onToggleShare, onHangup, inviteCandidates, onInvite,
+  call, title, avatarSeed, names, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, micsOff, quality, lowBandwidth,
+  activeSince, onToggleMic, onToggleCam, onToggleShare, onHangup, inviteCandidates, onInvite,
   convo, onSendChat, onReadChat,
 }) {
   const remotes = Object.entries(remoteStreams)
   const [inviteOpen, setInviteOpen] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
+
+  useEffect(() => {
+    if (call.status !== 'active') return
+    setElapsed(Date.now() - (activeSince?.current || Date.now()))
+    const id = setInterval(() => setElapsed(Date.now() - (activeSince?.current || Date.now())), 1000)
+    return () => clearInterval(id)
+  }, [call.status, activeSince])
+
+  const durationText = (() => {
+    const s = Math.max(0, Math.floor(elapsed / 1000))
+    const m = Math.floor(s / 60)
+    const h = Math.floor(m / 60)
+    const pad = (n) => String(n).padStart(2, '0')
+    return h > 0 ? `${h}:${pad(m % 60)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`
+  })()
   const [rung, setRung] = useState(new Set())
   const [chatOpen, setChatOpen] = useState(false)
   const [toast, setToast] = useState(null)
@@ -443,9 +462,12 @@ function CallOverlay({
         <div className="call-main" style={{ display: 'flex', flexDirection: 'column' }}>
           <div className="call-topbar">
             <span className="safety-icon">{Icon.lock}</span>
-            {title}
+            <span className="call-title-text">{title}</span>
             <span className="call-note">{sharing ? 'sharing your screen' : 'peer-to-peer, encrypted'}</span>
-            <QualityPill quality={quality} />
+            <div className="call-topbar-right">
+              {call.status === 'active' && <span className="call-timer">{durationText}</span>}
+              <QualityPill quality={quality} />
+            </div>
           </div>
 
           <div className="call-content" style={{ flex: 1, position: 'relative', overflow: 'hidden', minHeight: 0 }}>
@@ -458,27 +480,30 @@ function CallOverlay({
                   allowUnmute={!sharing}
                   label={sharing ? 'You are presenting' : `${names(remoteSharer)} is presenting`}
                   personName={sharing ? 'You' : names(remoteSharer)}
+                  seed={sharing ? 'you' : remoteSharer}
                 />
                 <div className="filmstrip">
                   {stripRemotes.map(([peerId, stream]) => (
-                    <Video key={peerId} stream={stream} className="strip-tile" label={names(peerId)} personName={names(peerId)} forceAvatar={!!camsOff[peerId]} isMicOff={!!micsOff[peerId]} />
+                    <Video key={peerId} stream={stream} className="strip-tile" label={names(peerId)} personName={names(peerId)} seed={peerId} forceAvatar={!!camsOff[peerId]} isMicOff={!!micsOff[peerId]} />
                   ))}
-                  {!sharing && <Video stream={localStream} muted className="strip-tile" label="you" personName="You" forceAvatar={!camOn} />}
+                  {!sharing && <Video stream={localStream} muted className="strip-tile" label="you" personName="You" seed="you" forceAvatar={!camOn} isMicOff={!micOn} />}
                 </div>
               </>
             ) : remotes.length === 0 ? (
               <div className="call-waiting">
-                <span className="avatar big">{call.mode === 'group' ? Icon.users : initials(title)}</span>
+                <span className="avatar big" style={{ background: avatarBg(avatarSeed ?? title), color: '#fff', borderColor: 'transparent' }}>
+                  {call.mode === 'group' ? Icon.users : initials(title)}
+                </span>
                 <p>{call.status === 'outgoing' ? `Calling ${title}…` : call.mode === 'group' ? 'Waiting for others to join…' : 'Connecting…'}</p>
               </div>
             ) : (
               <div className={`remote-grid n${Math.min(remotes.length, 4)}`}>
                 {remotes.map(([peerId, stream]) => (
-                  <Video key={peerId} stream={stream} className="remote-video" allowUnmute label={names(peerId)} personName={names(peerId)} forceAvatar={!!camsOff[peerId]} isMicOff={!!micsOff[peerId]} />
+                  <Video key={peerId} stream={stream} className="remote-video" allowUnmute label={names(peerId)} personName={names(peerId)} seed={peerId} forceAvatar={!!camsOff[peerId]} isMicOff={!!micsOff[peerId]} />
                 ))}
               </div>
             )}
-            {!presenting && <Video stream={localStream} muted className="local-video" personName="You" forceAvatar={!camOn} />}
+            {!presenting && <Video stream={localStream} muted className="local-video" personName="You" seed="you" forceAvatar={!camOn} isMicOff={!micOn} />}
             
             {lowBandwidth && (
               <div className="chat-toast bw-toast">
@@ -495,9 +520,11 @@ function CallOverlay({
           <div className="call-controls">
             <button className={`call-btn ${micOn ? '' : 'off'}`} aria-label={micOn ? 'Mute microphone' : 'Unmute microphone'} onClick={onToggleMic}>
               {micOn ? Icon.mic : Icon.micOff}
+              <span className="call-btn-label">{micOn ? 'Mute' : 'Unmute'}</span>
             </button>
             <button className={`call-btn ${camOn ? '' : 'off'}`} aria-label={camOn ? 'Turn camera off' : 'Turn camera on'} onClick={onToggleCam}>
               {camOn ? Icon.video : Icon.videoOff}
+              <span className="call-btn-label">{camOn ? 'Stop video' : 'Start video'}</span>
             </button>
             {canShare && (
               <button
@@ -507,6 +534,7 @@ function CallOverlay({
                 onClick={onToggleShare}
               >
                 {sharing ? Icon.monitorOff : Icon.monitor}
+                <span className="call-btn-label">{sharing ? 'Stop share' : 'Share'}</span>
               </button>
             )}
             <button
@@ -515,6 +543,7 @@ function CallOverlay({
               onClick={() => setChatOpen(!chatOpen)}
             >
               {Icon.copy}
+              <span className="call-btn-label">Chat</span>
               {unread > 0 && !chatOpen && <span className="unread chat-unread">{unread}</span>}
             </button>
             {call.mode === 'group' && inviteCandidates.length > 0 && (
@@ -527,6 +556,7 @@ function CallOverlay({
                   onClick={() => setInviteOpen(!inviteOpen)}
                 >
                   {Icon.userPlus}
+                  <span className="call-btn-label">Invite</span>
                 </button>
                 {inviteOpen && (
                   <div className="drawer invite-drawer" role="menu" style={{ bottom: 'calc(100% + 14px)' }}>
@@ -542,7 +572,7 @@ function CallOverlay({
                           setRung(new Set([...rung, m.id]))
                         }}
                       >
-                        <span className="avatar small-avatar">{initials(m.name)}</span>
+                        <span className="avatar small-avatar" style={{ background: avatarBg(m.id), color: '#fff' }}>{initials(m.name)}</span>
                         {rung.has(m.id) ? `Ringing ${m.name}…` : m.name}
                       </button>
                     ))}
@@ -552,6 +582,7 @@ function CallOverlay({
             )}
             <button className="call-btn end" aria-label="End call" onClick={onHangup}>
               {Icon.phoneEnd}
+              <span className="call-btn-label">End</span>
             </button>
           </div>
         </div>
@@ -610,10 +641,14 @@ function MemberPicker({ title, contacts, onPick, onClose }) {
   )
 }
 
-function IncomingCall({ title, subtitle, isGroup, onAccept, onDecline }) {
+function IncomingCall({ title, subtitle, isGroup, avatarSeed, onAccept, onDecline }) {
   return (
     <div className="incoming" role="alertdialog" aria-label={`Incoming call: ${title}`}>
-      <span className={`avatar ${isGroup ? 'group' : ''}`} aria-hidden="true">
+      <span
+        className={`avatar ${isGroup ? 'group' : ''}`}
+        aria-hidden="true"
+        style={isGroup ? undefined : { background: avatarBg(avatarSeed ?? title), color: '#fff', borderColor: 'transparent' }}
+      >
         {isGroup ? Icon.users : initials(title)}
       </span>
       <div className="incoming-body">
@@ -747,6 +782,7 @@ function Shell({ name, username, onSignOut }) {
   }, [announcement, dismissAnnouncement])
   const {
     call, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, micsOff, quality, lowBandwidth,
+    activeSince,
     startCall, startGroupCall, accept, decline, hangup, toggleMic, toggleCam, toggleShare, inviteToCall,
   } = useCall(socketRef, clientId, (target, log) => addLocalEntry(target, { t: 'call', ...log }))
 
@@ -859,6 +895,7 @@ function Shell({ name, username, onSignOut }) {
           <CallOverlay
             call={call}
             title={call.groupId ? groups.find(g => g.id === call.groupId)?.name : contacts.find(c => c.id === call.peerId)?.name}
+            avatarSeed={call.groupId ?? call.peerId}
             names={(id) => contacts.find((c) => c.id === id)?.name ?? groups.flatMap((g) => g.members).find((m) => m.id === id)?.name ?? 'Unknown'}
             localStream={localStream}
             remoteStreams={remoteStreams}
@@ -870,6 +907,7 @@ function Shell({ name, username, onSignOut }) {
             micsOff={micsOff}
             quality={quality}
             lowBandwidth={lowBandwidth}
+            activeSince={activeSince}
             onToggleMic={toggleMic}
             onToggleCam={toggleCam}
             onToggleShare={toggleShare}
@@ -998,6 +1036,7 @@ function Shell({ name, username, onSignOut }) {
           title={call.groupId ? groups.find((g) => g.id === call.groupId)?.name ?? 'Group call' : contacts.find((c) => c.id === call.peerId)?.name ?? 'Unknown'}
           subtitle={call.mode === 'group' ? `${call.callerName ?? 'Someone'} is starting a group call` : 'incoming video call'}
           isGroup={call.mode === 'group'}
+          avatarSeed={call.groupId ?? call.peerId}
           onAccept={() => {
             accept()
             setActiveId(call.groupId ?? call.peerId)
