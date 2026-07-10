@@ -75,7 +75,7 @@ export function InvitePage({ code, socketRef, connected, onJoin, onCancel }: Inv
           </button>
           <button type="button" className="secondary" onClick={onCancel}>Decline</button>
         </div>
-        <p className="invite-encrypted">{Icon.lock} End-to-end encrypted — the server never reads your messages</p>
+        <p className="invite-encrypted"><span className="invite-encrypted-icon">{Icon.lock}</span>End-to-end encrypted</p>
       </div>
     </div>
   )

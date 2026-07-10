@@ -2393,11 +2393,17 @@ video.media { width: min(320px, 62vw); }
   padding-top: 18px;
   border-top: 1px solid var(--border);
   width: 100%;
+  white-space: nowrap;
   color: var(--muted);
   font-size: 0.78rem;
 }
 
-.invite-encrypted svg { width: 14px; height: 14px; flex-shrink: 0; }
+.invite-encrypted-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.invite-encrypted-icon svg { width: 15px; height: 15px; }
 
 .invite-card-icon {
   display: grid;
