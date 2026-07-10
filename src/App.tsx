@@ -948,6 +948,14 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
   const activeContact = contacts.find((c) => c.id === activeId)
   const activeGroup = groups.find((g) => g.id === activeId)
 
+  // Thread.tsx has no concept of "read" — clear the unread badge here
+  // whenever the open conversation has any, whether that's from just
+  // selecting it or a message arriving while it's already open.
+  const activeUnread = activeId ? convos[activeId]?.unread : 0
+  useEffect(() => {
+    if (activeId && activeUnread) markRead(activeId)
+  }, [activeId, activeUnread, markRead])
+
   const forward = async (targetId: string, msg: ConvoMessage) => {
     const body = msg.body
     if ('t' in body && body.t === 'file') {

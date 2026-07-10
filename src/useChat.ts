@@ -82,6 +82,8 @@ export function useChat(name: string, username: string) {
   const [passkeyError, setPasskeyError] = useState<string | null>(null)
   const [passkeys, setPasskeys] = useState<Passkey[] | null>(null)
   const [pushEnabled, setPushEnabled] = useState(false)
+  const pushEnabledRef = useRef(pushEnabled)
+  pushEnabledRef.current = pushEnabled
   const [announcement, setAnnouncement] = useState<Announcement | null>(null)
 
   const socketRef = useRef<Socket | null>(null)
@@ -390,6 +392,16 @@ export function useChat(name: string, username: string) {
           : { id: msgId, kind: 'error', body: { text: `A message from ${fromName} could not be decrypted` }, ts }
         if (!group && env) socket.emit('delivered', { to: from, msgId })
         addEntry(key, entry, true)
+
+        // Push only fires server-side when there's no live socket at all —
+        // but a backgrounded tab still holds one, so it would otherwise stay
+        // completely silent. Mirror the same "new message" notification
+        // locally whenever the page isn't visible and push is opted into.
+        if (env && document.hidden && pushEnabledRef.current) {
+          navigator.serviceWorker?.ready.then((reg) => {
+            reg.showNotification(fromName || 'Sable', { body: 'Sent you a message', icon: '/icon-192.png', tag: `live-${group ? 'g' : 'd'}m-${key}` })
+          }).catch(() => {})
+        }
       }
 
       socket.on('dm', ({ from, fromName, id: msgId, payload, ts }: { from: string; fromName?: string; id: string; payload: EncryptedPayload; ts: number }) =>
