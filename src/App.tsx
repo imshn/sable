@@ -823,7 +823,7 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
     if (path.startsWith('/invite/')) return path.split('/')[2]
     return null
   })
-  const chat = useChat(name, username)
+  const chat = useChat(name, username, activeId)
   const {
     clientId, contacts, groups, convos, connected, safetyCode, sessionReplaced, authError, myProfile,
     passkeyRequired, passkeyError, passkeys, pushEnabled, announcement, dismissAnnouncement,

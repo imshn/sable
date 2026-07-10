@@ -69,7 +69,7 @@ interface BacklogRow {
   delivered?: boolean
 }
 
-export function useChat(name: string, username: string) {
+export function useChat(name: string, username: string, activeId: string | null = null) {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [groups, setGroups] = useState<Group[]>([])
   const [convos, setConvos] = useState<Record<string, Convo>>({})
@@ -84,6 +84,8 @@ export function useChat(name: string, username: string) {
   const [pushEnabled, setPushEnabled] = useState(false)
   const pushEnabledRef = useRef(pushEnabled)
   pushEnabledRef.current = pushEnabled
+  const activeIdRef = useRef(activeId)
+  activeIdRef.current = activeId
   const [announcement, setAnnouncement] = useState<Announcement | null>(null)
 
   const socketRef = useRef<Socket | null>(null)
@@ -394,10 +396,12 @@ export function useChat(name: string, username: string) {
         addEntry(key, entry, true)
 
         // Push only fires server-side when there's no live socket at all —
-        // but a backgrounded tab still holds one, so it would otherwise stay
-        // completely silent. Mirror the same "new message" notification
-        // locally whenever the page isn't visible and push is opted into.
-        if (env && document.hidden && pushEnabledRef.current) {
+        // but an open tab holds one regardless of whether it's backgrounded
+        // or just sitting on a different conversation, so it would otherwise
+        // stay completely silent either way. Mirror the same "new message"
+        // notification locally whenever this isn't the conversation being
+        // looked at right now and push is opted into.
+        if (env && (document.hidden || activeIdRef.current !== key) && pushEnabledRef.current) {
           navigator.serviceWorker?.ready.then((reg) => {
             reg.showNotification(fromName || 'Sable', { body: 'Sent you a message', icon: '/icon-192.png', tag: `live-${group ? 'g' : 'd'}m-${key}` })
           }).catch(() => {})
