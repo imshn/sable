@@ -9,6 +9,7 @@ export default defineConfig({
       '/preview': { target: 'http://localhost:3001' },
       '/turn': { target: 'http://localhost:3001' },
       '/api': { target: 'http://localhost:3001' },
+      '/vapid-key': { target: 'http://localhost:3001' },
     },
   },
 })
