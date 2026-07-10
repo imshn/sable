@@ -2840,29 +2840,6 @@ video.media { width: min(320px, 62vw); }
 
 .admin-chart-total { color: var(--muted); font-weight: 400; }
 
-.admin-chart-bars {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 72px;
-}
-
-.admin-bar-slot {
-  flex: 1;
-  height: 100%;
-  display: flex;
-  align-items: flex-end;
-  background: var(--chip-bg);
-  border-radius: 2px;
-}
-
-.admin-bar {
-  width: 100%;
-  background: var(--accent);
-  border-radius: 2px;
-  min-height: 0;
-}
-
 .admin-section h3 { font-size: 1rem; font-weight: 600; margin-bottom: 12px; }
 
 .admin-online { display: flex; flex-wrap: wrap; gap: 8px; }

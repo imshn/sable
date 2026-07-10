@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject, type FormEvent } from 'react'
+import { useEffect, useRef, useState, lazy, Suspense, type RefObject, type FormEvent } from 'react'
 import type { Socket } from 'socket.io-client'
 import { useChat } from './useChat.ts'
 import { useCall, type OnLog } from './useCall.ts'
@@ -10,7 +10,10 @@ import { ContactsPage } from './ContactsPage.tsx'
 import { ProfileSettingsModal } from './ProfileSettingsModal.tsx'
 import { ConfirmModal } from './ConfirmModal.tsx'
 import { InvitePage } from './InvitePage.tsx'
-import { AdminPage } from './AdminPage.tsx'
+
+// Lazy so recharts + the dashboard never load for regular users — only the
+// operator visiting /admin pays for that chunk.
+const AdminPage = lazy(() => import('./AdminPage.tsx').then((m) => ({ default: m.AdminPage })))
 import { avatarBg } from './avatarColor.ts'
 import type {
   Contact, Group, Convo, ConvoMessage, ChatTarget, QualitySample, MyProfile,
@@ -1233,7 +1236,9 @@ export default function App() {
 
   // Operator dashboard — deliberately outside the session gate so it never
   // touches chat identity; the server 404s everything without the admin key.
-  if (window.location.pathname === '/admin') return <AdminPage />
+  if (window.location.pathname === '/admin') {
+    return <Suspense fallback={null}><AdminPage /></Suspense>
+  }
 
   return (
     <>

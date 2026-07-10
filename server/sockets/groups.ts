@@ -131,6 +131,9 @@ export function registerGroups(socket: AppSocket, ctx: ConnectionCtx): void {
         if (u) io.to(u.socketId).emit(ev, data)
         return
       }
+      // analytics: a ring with no `to` is someone starting a group call
+      // (targeted rings are mid-call invites); group calls are always video
+      if (ev === 'gcall-ring') store.logCall(randomUUID(), from, null, groupId, true)
       emitToMembers(groupId, ev, data, from)
     })
   }

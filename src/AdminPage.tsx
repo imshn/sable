@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts'
 import { Icon } from './icons.tsx'
 import { avatarBg } from './avatarColor.ts'
 
@@ -17,12 +18,14 @@ interface Stats {
     users: number; newUsers7d: number; dau: number; groups: number
     contactPairs: number; pushSubs: number; reports: number
     messagesRelayed: number; messages24h: number; activeSessions24h: number
+    invites: number; callsTotal: number; videoCalls: number; voiceCalls: number; calls24h: number
   }
   online: { count: number; users: { id: string; name: string; username?: string }[] }
-  series: { signups: DayPoint[]; logins: DayPoint[]; messages: DayPoint[] }
+  series: { signups: DayPoint[]; logins: DayPoint[]; messages: DayPoint[]; invites: DayPoint[]; calls: DayPoint[] }
   users: {
     id: string; name: string; username: string; created_at: number; last_seen: number
-    deleted: boolean; messages: number; sessions: number; online: boolean
+    deleted: boolean; sent: number; received: number; calls: number; invites: number
+    sessions: number; online: boolean
   }[]
   recentLogins: { userId: string; name?: string; ip?: string; device?: string; loggedInAt: number; lastActive: number; revoked: boolean }[]
   reports: { id: string; reporterId: string; reportedId: string; category: string; details?: string; createdAt: number }[]
@@ -51,9 +54,8 @@ function last30Days(points: DayPoint[]): DayPoint[] {
   return out
 }
 
-function BarChart({ title, points }: { title: string; points: DayPoint[] }) {
+function DayChart({ title, points }: { title: string; points: DayPoint[] }) {
   const days = last30Days(points)
-  const max = Math.max(1, ...days.map((d) => d.c))
   const total = days.reduce((s, d) => s + d.c, 0)
   return (
     <div className="admin-chart">
@@ -61,13 +63,25 @@ function BarChart({ title, points }: { title: string; points: DayPoint[] }) {
         <span>{title}</span>
         <span className="admin-chart-total">{total} / 30d</span>
       </div>
-      <div className="admin-chart-bars">
-        {days.map((d) => (
-          <div key={d.day} className="admin-bar-slot" title={`${d.day}: ${d.c}`}>
-            <div className="admin-bar" style={{ height: `${Math.max(d.c > 0 ? 6 : 0, (d.c / max) * 100)}%` }} />
-          </div>
-        ))}
-      </div>
+      <ResponsiveContainer width="100%" height={130}>
+        <BarChart data={days} margin={{ top: 4, right: 0, left: -22, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+          <XAxis
+            dataKey="day" interval={6} tickLine={false} axisLine={false}
+            tick={{ fontSize: 10, fill: 'var(--muted)' }}
+            tickFormatter={(d: string) => d.slice(5)}
+          />
+          <YAxis allowDecimals={false} tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: 'var(--muted)' }} />
+          <Tooltip
+            cursor={{ fill: 'var(--chip-bg-hover)' }}
+            contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border-strong)', borderRadius: 10, fontSize: 12, color: 'var(--text)' }}
+            labelStyle={{ color: 'var(--muted)' }}
+            itemStyle={{ color: 'var(--accent)' }}
+            formatter={(v) => [v, title]}
+          />
+          <Bar dataKey="c" fill="var(--accent)" radius={[3, 3, 0, 0]} maxBarSize={18} />
+        </BarChart>
+      </ResponsiveContainer>
     </div>
   )
 }
@@ -162,15 +176,21 @@ export function AdminPage() {
         <StatCard label="Active today" value={t.dau} sub="seen in last 24h" />
         <StatCard label="Sessions (24h)" value={t.activeSessions24h} />
         <StatCard label="Messages (24h)" value={t.messages24h} sub={`${t.messagesRelayed} all-time`} />
+        <StatCard label="Calls (24h)" value={t.calls24h} sub={`${t.callsTotal} all-time`} />
+        <StatCard label="Video calls" value={t.videoCalls} />
+        <StatCard label="Voice calls" value={t.voiceCalls} />
+        <StatCard label="Invites created" value={t.invites} />
         <StatCard label="Groups" value={t.groups} />
         <StatCard label="Connections" value={t.contactPairs} sub="accepted contact pairs" />
         <StatCard label="Push devices" value={t.pushSubs} />
       </div>
 
       <div className="admin-charts">
-        <BarChart title="Signups" points={stats.series.signups} />
-        <BarChart title="Logins" points={stats.series.logins} />
-        <BarChart title="Messages relayed" points={stats.series.messages} />
+        <DayChart title="Signups" points={stats.series.signups} />
+        <DayChart title="Logins" points={stats.series.logins} />
+        <DayChart title="Messages" points={stats.series.messages} />
+        <DayChart title="Calls" points={stats.series.calls} />
+        <DayChart title="Invites" points={stats.series.invites} />
       </div>
 
       <section className="admin-section">
@@ -193,7 +213,7 @@ export function AdminPage() {
         <h3>Users ({stats.users.length})</h3>
         <div className="admin-table-wrap">
           <table className="admin-table">
-            <thead><tr><th>User</th><th>Username</th><th>Joined</th><th>Last seen</th><th>Messages</th><th>Logins</th><th>Status</th></tr></thead>
+            <thead><tr><th>User</th><th>Username</th><th>Joined</th><th>Last seen</th><th>Sent</th><th>Received</th><th>Calls</th><th>Invites</th><th>Logins</th><th>Status</th></tr></thead>
             <tbody>
               {stats.users.map((u) => (
                 <tr key={u.id} className={u.deleted ? 'deleted' : ''}>
@@ -201,7 +221,10 @@ export function AdminPage() {
                   <td>@{u.username}</td>
                   <td>{fmtDate(u.created_at)}</td>
                   <td>{relative(u.last_seen)}</td>
-                  <td>{u.messages}</td>
+                  <td>{u.sent}</td>
+                  <td>{u.received}</td>
+                  <td>{u.calls}</td>
+                  <td>{u.invites}</td>
                   <td>{u.sessions}</td>
                   <td>
                     {u.deleted ? <span className="admin-badge muted">deleted</span>

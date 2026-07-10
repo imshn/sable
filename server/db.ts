@@ -145,7 +145,18 @@ export async function migrate(): Promise<void> {
       auth TEXT NOT NULL,
       created_at INTEGER NOT NULL
     )`,
-    `CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions(user_id)`
+    `CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions(user_id)`,
+    // Call initiations, metadata only (who rang whom, video or voice, when) —
+    // media is peer-to-peer so this is all the server can ever know anyway.
+    `CREATE TABLE IF NOT EXISTS call_logs (
+      id TEXT PRIMARY KEY,
+      caller TEXT NOT NULL,
+      callee TEXT,
+      group_id TEXT,
+      video INTEGER NOT NULL DEFAULT 1,
+      ts INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_call_logs_ts ON call_logs(ts)`
   ], 'write')
 
   // Safely add columns using a helper that swallows "column already exists" errors
@@ -362,6 +373,12 @@ export const store = {
       sql: `INSERT OR IGNORE INTO messages (id, recipient, sender, sender_pub, group_id, payload, ts, delivered)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [id, recipient, sender, senderPub, groupId, payload, ts, delivered ? 1 : 0],
+    })),
+
+  logCall: (id: string, caller: string, callee: string | null, groupId: string | null, video: boolean) =>
+    db && safe(db.execute({
+      sql: `INSERT INTO call_logs (id, caller, callee, group_id, video, ts) VALUES (?, ?, ?, ?, ?, ?)`,
+      args: [id, caller, callee, groupId, video ? 1 : 0, Date.now()],
     })),
 
   markDelivered: (id: string, recipient: string) =>

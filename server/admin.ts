@@ -58,7 +58,8 @@ export function registerAdmin(app: Express): void {
     const [
       users, newUsers7d, dau, groupCount, contactPairs, pushSubs, reports,
       messagesRelayed, messages24h, activeSessions24h,
-      signups, logins, messages,
+      invites, callsTotal, videoCalls, voiceCalls, calls24h,
+      signups, logins, messages, inviteSeries, callSeries,
     ] = await Promise.all([
       count(`SELECT COUNT(*) c FROM users WHERE deleted=0`),
       count(`SELECT COUNT(*) c FROM users WHERE deleted=0 AND created_at > ?`, [now - 7 * DAY]),
@@ -70,9 +71,16 @@ export function registerAdmin(app: Express): void {
       count(`SELECT COUNT(*) c FROM messages WHERE recipient != sender`),
       count(`SELECT COUNT(*) c FROM messages WHERE recipient != sender AND ts > ?`, [now - DAY]),
       count(`SELECT COUNT(*) c FROM user_sessions WHERE revoked=0 AND last_active > ?`, [now - DAY]),
+      count(`SELECT COUNT(*) c FROM invitations`),
+      count(`SELECT COUNT(*) c FROM call_logs`),
+      count(`SELECT COUNT(*) c FROM call_logs WHERE video=1`),
+      count(`SELECT COUNT(*) c FROM call_logs WHERE video=0`),
+      count(`SELECT COUNT(*) c FROM call_logs WHERE ts > ?`, [now - DAY]),
       series('users', 'created_at', 'deleted=0'),
       series('user_sessions', 'logged_in_at'),
       series('messages', 'ts', 'recipient != sender'),
+      series('invitations', 'created_at'),
+      series('call_logs', 'ts'),
     ])
 
     let userRows: unknown[] = []
@@ -82,13 +90,17 @@ export function registerAdmin(app: Express): void {
       // ponytail: caps at 500 most-recently-seen users; page it if Sable outgrows that
       const u = await db.execute(`
         SELECT u.id, u.name, u.username, u.created_at, u.last_seen, u.deleted,
-               (SELECT COUNT(*) FROM messages m WHERE m.sender = u.id AND m.recipient != m.sender) AS messages,
+               (SELECT COUNT(*) FROM messages m WHERE m.sender = u.id AND m.recipient != m.sender) AS sent,
+               (SELECT COUNT(*) FROM messages m WHERE m.recipient = u.id AND m.sender != u.id) AS received,
+               (SELECT COUNT(*) FROM call_logs c WHERE c.caller = u.id) AS calls,
+               (SELECT COUNT(*) FROM invitations i WHERE i.creator_id = u.id) AS invites,
                (SELECT COUNT(*) FROM user_sessions s WHERE s.user_id = u.id) AS sessions
         FROM users u ORDER BY u.last_seen DESC LIMIT 500`)
       userRows = u.rows.map((r) => ({
         id: r.id, name: r.name, username: r.username,
         created_at: Number(r.created_at), last_seen: Number(r.last_seen),
-        deleted: !!r.deleted, messages: Number(r.messages), sessions: Number(r.sessions),
+        deleted: !!r.deleted, sent: Number(r.sent), received: Number(r.received),
+        calls: Number(r.calls), invites: Number(r.invites), sessions: Number(r.sessions),
         online: online.has(String(r.id)),
       }))
       const l = await db.execute(`
@@ -113,12 +125,13 @@ export function registerAdmin(app: Express): void {
       totals: {
         users, newUsers7d, dau, groups: groupCount, contactPairs, pushSubs,
         reports, messagesRelayed, messages24h, activeSessions24h,
+        invites, callsTotal, videoCalls, voiceCalls, calls24h,
       },
       online: {
         count: online.size,
         users: [...online.entries()].map(([id, u]) => ({ id, name: u.name, username: u.username })),
       },
-      series: { signups, logins, messages },
+      series: { signups, logins, messages, invites: inviteSeries, calls: callSeries },
       users: userRows,
       recentLogins,
       reports: reportRows,

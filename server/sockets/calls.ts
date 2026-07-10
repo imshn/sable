@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { io } from '../io.js'
 import { store } from '../db.js'
 import { online, privacyCache } from '../state.js'
@@ -54,6 +55,9 @@ export function registerCalls(socket: AppSocket, ctx: ConnectionCtx): void {
       socket.emit('call-declined', { from: msg.to, reason: 'privacy' })
       return
     }
+    // analytics: a fresh 1:1 ring that actually reached the callee — not ICE
+    // restarts or group-mesh offers (those re-use call-offer as plumbing)
+    if (!msg.restart && !msg.group) store.logCall(randomUUID(), from, msg.to, null, msg.video !== false)
     io.to(target.socketId).emit('call-offer', { ...msg, from, fromName: online.get(from)?.name })
   })
 }
