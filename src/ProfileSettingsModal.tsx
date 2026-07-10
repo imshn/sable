@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react'
-import { Icon } from './icons.jsx'
-import { PrivacySettingsPage } from './PrivacySettingsPage.jsx'
-import { NotificationPrefsPage } from './NotificationPrefsPage.jsx'
-import { SecurityPage } from './SecurityPage.jsx'
+import { useState, useEffect, type FormEvent } from 'react'
+import type { Socket } from 'socket.io-client'
+import { Icon } from './icons.tsx'
+import { PrivacySettingsPage } from './PrivacySettingsPage.tsx'
+import { NotificationPrefsPage } from './NotificationPrefsPage.tsx'
+import { SecurityPage } from './SecurityPage.tsx'
+import type { Contact, MyProfile, Passkey, PasskeyActionResult } from './types.ts'
 
 const TABS = [
   { id: 'profile',       label: 'Profile',       icon: 'profile'  },
@@ -10,10 +12,38 @@ const TABS = [
   { id: 'notifications', label: 'Notifications',  icon: 'bell'     },
   { id: 'security',      label: 'Security',        icon: 'shield'   },
   { id: 'general',       label: 'General',         icon: 'settings' },
-]
+] as const
 
-export function ProfileSettingsModal({ user, onClose, onUpdateProfile, socket, blockedContacts = [], unblockContact, onShowInvite, onSignOut, passkeys, onFetchPasskeys, onDeletePasskey, onRegisterPasskey, pushEnabled, onEnablePush, onDisablePush }) {
-  const [activeTab, setActiveTab] = useState('profile')
+interface ProfileUpdate {
+  name: string
+  username: string
+  bio: string
+  avatar: string
+}
+
+interface ProfileSettingsModalProps {
+  user: MyProfile | null
+  onClose: (updatedUser?: MyProfile) => void
+  onUpdateProfile: (update: ProfileUpdate) => void
+  socket: Socket
+  blockedContacts?: Contact[]
+  unblockContact: (id: string) => void
+  onShowInvite?: () => void
+  onSignOut?: () => void
+  passkeys: Passkey[] | null
+  onFetchPasskeys?: () => void
+  onDeletePasskey?: (credentialId: string) => void
+  onRegisterPasskey?: () => Promise<PasskeyActionResult>
+  pushEnabled: boolean
+  onEnablePush?: () => Promise<boolean>
+  onDisablePush?: () => Promise<void>
+}
+
+export function ProfileSettingsModal({
+  user, onClose, onUpdateProfile, socket, blockedContacts = [], unblockContact, onShowInvite, onSignOut,
+  passkeys, onFetchPasskeys, onDeletePasskey, onRegisterPasskey, pushEnabled, onEnablePush, onDisablePush,
+}: ProfileSettingsModalProps) {
+  const [activeTab, setActiveTab] = useState<typeof TABS[number]['id']>('profile')
   const [name, setName] = useState(user?.name || '')
   const [username, setUsername] = useState(user?.username || '')
   const [bio, setBio] = useState(user?.bio || '')
@@ -24,8 +54,8 @@ export function ProfileSettingsModal({ user, onClose, onUpdateProfile, socket, b
   const [deleteInput, setDeleteInput] = useState('')
 
   useEffect(() => {
-    const handleProfileUpdated = (updatedUser) => { setIsSaving(false); onClose(updatedUser) }
-    const handleError = (err) => { setIsSaving(false); setError(err) }
+    const handleProfileUpdated = (updatedUser: MyProfile) => { setIsSaving(false); onClose(updatedUser) }
+    const handleError = (err: string) => { setIsSaving(false); setError(err) }
     socket.on('profile-updated', handleProfileUpdated)
     socket.on('profile-error', handleError)
     return () => {
@@ -34,7 +64,7 @@ export function ProfileSettingsModal({ user, onClose, onUpdateProfile, socket, b
     }
   }, [socket, onClose])
 
-  const handleSave = (e) => {
+  const handleSave = (e: FormEvent) => {
     e.preventDefault()
     setError('')
     if (!name.trim()) { setError('Display name is required'); return }
@@ -189,7 +219,7 @@ export function ProfileSettingsModal({ user, onClose, onUpdateProfile, socket, b
                   </div>
                   <p className="empty-sub" style={{ marginBottom: 12 }}>Choose your preferred theme.</p>
                   <div style={{ display: 'flex', gap: 10 }}>
-                    {['dark', 'light'].map(t => (
+                    {(['dark', 'light'] as const).map(t => (
                       <button
                         key={t}
                         type="button"

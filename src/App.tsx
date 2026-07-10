@@ -1,16 +1,22 @@
-import { useEffect, useRef, useState } from 'react'
-import { useChat } from './useChat.js'
-import { useCall } from './useCall.js'
-import { Icon } from './icons.jsx'
-import { Thread, callLogText, Linkified } from './Thread.jsx'
-import { ContactsPage } from './ContactsPage.jsx'
-import { ProfileSettingsModal } from './ProfileSettingsModal.jsx'
-import { ConfirmModal } from './ConfirmModal.jsx'
-import { InvitePage } from './InvitePage.jsx'
-import { avatarBg } from './avatarColor.js'
+import { useEffect, useRef, useState, type RefObject, type FormEvent } from 'react'
+import type { Socket } from 'socket.io-client'
+import { useChat } from './useChat.ts'
+import { useCall, type OnLog } from './useCall.ts'
+import { Icon } from './icons.tsx'
+import { Thread, callLogText, Linkified } from './Thread.tsx'
+import { ContactsPage } from './ContactsPage.tsx'
+import { ProfileSettingsModal } from './ProfileSettingsModal.tsx'
+import { ConfirmModal } from './ConfirmModal.tsx'
+import { InvitePage } from './InvitePage.tsx'
+import { avatarBg } from './avatarColor.ts'
+import type {
+  Contact, Group, Convo, ConvoMessage, ChatTarget, QualitySample, MyProfile,
+} from './types.ts'
 
-function useTheme() {
-  const [theme, setTheme] = useState(() => localStorage.getItem('sable-theme') ?? 'dark')
+type Theme = 'dark' | 'light'
+
+function useTheme(): [Theme, () => void] {
+  const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem('sable-theme') as Theme) ?? 'dark')
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('sable-theme', theme)
@@ -18,7 +24,7 @@ function useTheme() {
   return [theme, () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))]
 }
 
-function ThemeToggle({ className }) {
+function ThemeToggle({ className }: { className?: string }) {
   const [theme, toggle] = useTheme()
   return (
     <button
@@ -32,11 +38,16 @@ function ThemeToggle({ className }) {
   )
 }
 
-function Welcome({ onEnter }) {
+interface Session {
+  name: string
+  username: string
+}
+
+function Welcome({ onEnter }: { onEnter: (session: Session) => void }) {
   const [name, setName] = useState(localStorage.getItem('sable-name') ?? '')
   const [username, setUsername] = useState(localStorage.getItem('sable-username') ?? '')
 
-  const submit = (e) => {
+  const submit = (e: FormEvent) => {
     e.preventDefault()
     const trimmedName = name.trim()
     const trimmedUsername = username.trim().toLowerCase()
@@ -88,7 +99,7 @@ function Welcome({ onEnter }) {
             autoComplete="off"
             autoFocus
           />
-          
+
           <label htmlFor="name" style={{ marginTop: '1rem' }}>Display Name</label>
           <input
             id="name"
@@ -110,16 +121,16 @@ function Welcome({ onEnter }) {
 }
 
 const timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
-const initials = (n) => n.trim().slice(0, 2).toUpperCase()
+const initials = (n: string) => n.trim().slice(0, 2).toUpperCase()
 
-const previewText = (last, targetName) => {
+const previewText = (last: ConvoMessage | undefined, targetName: string): string => {
   const body = last?.body
   if (!body) return ''
   if (last.deleted) return 'Message deleted'
-  if (last.kind === 'call') return callLogText(body, targetName)
-  if (last.kind === 'sys') return body.text
-  if (body.t === 'loc') return 'Location'
-  if (body.t === 'file') {
+  if (last.kind === 'call') return callLogText(body as Parameters<typeof callLogText>[0], targetName)
+  if (last.kind === 'sys') return 'text' in body ? body.text : ''
+  if ('t' in body && body.t === 'loc') return 'Location'
+  if ('t' in body && body.t === 'file') {
     if (body.caption) return body.caption
     if (body.voice) return 'Voice message'
     if (body.mime?.startsWith('image/')) return 'Photo'
@@ -127,10 +138,26 @@ const previewText = (last, targetName) => {
     if (body.mime?.startsWith('audio/')) return 'Audio'
     return body.name
   }
-  return body.text
+  return 'text' in body ? body.text : ''
 }
 
-function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, onShowProfile, onShowInvite, safetyCode, connected, onSignOut }) {
+type SidebarRow = (Group & { isGroup: true; memberCount: number }) | (Contact & { isGroup?: false })
+
+interface SidebarProps {
+  name: string
+  rows: SidebarRow[]
+  convos: Record<string, Convo>
+  activeId: string | null
+  onSelect: (id: string) => void
+  onNewGroup: () => void
+  onShowProfile: () => void
+  onShowInvite: () => void
+  safetyCode: string
+  connected: boolean
+  onSignOut: () => void
+}
+
+function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, onShowProfile, onShowInvite: _onShowInvite, safetyCode, connected, onSignOut: _onSignOut }: SidebarProps) {
   return (
     <aside className="sidebar">
       <header className="sidebar-header">
@@ -192,7 +219,7 @@ function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, onShowPro
                       'offline'
                     )}
                   </span>
-                  {convo?.unread > 0 && <span className="unread">{convo.unread}</span>}
+                  {!!convo?.unread && convo.unread > 0 && <span className="unread">{convo.unread}</span>}
                 </span>
               </span>
             </button>
@@ -209,11 +236,17 @@ function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, onShowPro
   )
 }
 
-function NewGroupModal({ contacts, onCreate, onClose }) {
-  const [groupName, setGroupName] = useState('')
-  const [picked, setPicked] = useState(new Set())
+interface NewGroupModalProps {
+  contacts: Contact[]
+  onCreate: (name: string, memberIds: string[]) => void
+  onClose: () => void
+}
 
-  const toggle = (id) =>
+function NewGroupModal({ contacts, onCreate, onClose }: NewGroupModalProps) {
+  const [groupName, setGroupName] = useState('')
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+
+  const toggle = (id: string) =>
     setPicked((prev) => {
       const next = new Set(prev)
       next.has(id) ? next.delete(id) : next.add(id)
@@ -266,12 +299,24 @@ function NewGroupModal({ contacts, onCreate, onClose }) {
   )
 }
 
+interface VideoProps {
+  stream: MediaStream | null
+  muted?: boolean
+  className?: string
+  allowUnmute?: boolean
+  label?: string
+  personName?: string
+  seed?: string
+  forceAvatar?: boolean
+  isMicOff?: boolean
+}
+
 // Autoplay-safe video: browsers block unmuted autoplay once the user-gesture
 // window (~5s) lapses, which is how long ICE can take — the classic "call
 // connected but screen stays black". Fall back to muted playback + unmute pill.
 // When the video track goes dark (camera off), show the person instead of a void.
-function Video({ stream, muted, className, allowUnmute, label, personName, seed, forceAvatar, isMicOff }) {
-  const ref = useRef(null)
+function Video({ stream, muted, className, allowUnmute, label, personName, seed, forceAvatar, isMicOff }: VideoProps) {
+  const ref = useRef<HTMLVideoElement>(null)
   const [blocked, setBlocked] = useState(false)
   const [videoDark, setVideoDark] = useState(false)
 
@@ -343,17 +388,24 @@ function Video({ stream, muted, className, allowUnmute, label, personName, seed,
   )
 }
 
+interface CallChatProps {
+  convo?: Convo
+  names: (id: string) => string
+  onSend: (text: string) => void
+  onClose: () => void
+}
+
 // text-only chat panel inside a call, Meet style — same encrypted conversation
-function CallChat({ convo, names, onSend, onClose }) {
+function CallChat({ convo, names, onSend, onClose }: CallChatProps) {
   const [draft, setDraft] = useState('')
-  const listRef = useRef(null)
+  const listRef = useRef<HTMLDivElement>(null)
   const messages = convo?.messages.filter((m) => m.kind === 'self' || m.kind === 'peer') ?? []
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight })
   }, [messages.length])
 
-  const submit = (e) => {
+  const submit = (e: FormEvent) => {
     e.preventDefault()
     if (!draft.trim()) return
     onSend(draft.trim())
@@ -370,9 +422,9 @@ function CallChat({ convo, names, onSend, onClose }) {
         {messages.length === 0 && <p className="hint">Messages stay in the conversation after the call.</p>}
         {messages.map((m) => (
           <div key={m.id} className={`call-chat-msg ${m.kind === 'self' ? 'self' : ''}`}>
-            <span className="call-chat-sender">{m.kind === 'self' ? 'you' : m.name ?? names(m.from)}</span>
+            <span className="call-chat-sender">{m.kind === 'self' ? 'you' : m.name ?? names(m.from!)}</span>
             <span className="call-chat-text">
-              {m.deleted ? 'Message deleted' : m.body.t === 'text' ? <Linkified text={m.body.text} /> : previewText(m, '')}
+              {m.deleted ? 'Message deleted' : 't' in m.body && m.body.t === 'text' ? <Linkified text={m.body.text} /> : previewText(m, '')}
             </span>
           </div>
         ))}
@@ -393,7 +445,7 @@ function CallChat({ convo, names, onSend, onClose }) {
   )
 }
 
-function QualityPill({ quality }) {
+function QualityPill({ quality }: { quality: QualitySample | null }) {
   if (!quality) return null
   const label = { excellent: 'Excellent', good: 'Good', poor: 'Poor' }[quality.level]
   return (
@@ -407,11 +459,45 @@ function QualityPill({ quality }) {
   )
 }
 
+type UseCallReturn = ReturnType<typeof useCall>
+
+interface CallOverlayProps {
+  call: UseCallReturn['call']
+  title?: string
+  avatarSeed?: string
+  names: (id: string) => string
+  localStream: MediaStream | null
+  remoteStreams: Record<string, MediaStream>
+  micOn: boolean
+  camOn: boolean
+  sharing: boolean
+  sharers: Record<string, true>
+  camsOff: Record<string, true>
+  micsOff: Record<string, true>
+  quality: QualitySample | null
+  lowBandwidth: boolean
+  activeSince: RefObject<number>
+  onToggleMic: () => void
+  onToggleCam: () => void
+  onToggleShare: () => void
+  onHangup: () => void
+  inviteCandidates: GroupMemberLike[]
+  onInvite: (memberId: string) => void
+  convo?: Convo
+  onSendChat: (text: string) => void
+  onReadChat: () => void
+}
+
+interface GroupMemberLike {
+  id: string
+  name: string
+}
+
 function CallOverlay({
   call, title, avatarSeed, names, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, micsOff, quality, lowBandwidth,
   activeSince, onToggleMic, onToggleCam, onToggleShare, onHangup, inviteCandidates, onInvite,
   convo, onSendChat, onReadChat,
-}) {
+}: CallOverlayProps) {
   const remotes = Object.entries(remoteStreams)
   const [inviteOpen, setInviteOpen] = useState(false)
   const [elapsed, setElapsed] = useState(0)
@@ -427,12 +513,12 @@ function CallOverlay({
     const s = Math.max(0, Math.floor(elapsed / 1000))
     const m = Math.floor(s / 60)
     const h = Math.floor(m / 60)
-    const pad = (n) => String(n).padStart(2, '0')
+    const pad = (n: number) => String(n).padStart(2, '0')
     return h > 0 ? `${h}:${pad(m % 60)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`
   })()
-  const [rung, setRung] = useState(new Set())
+  const [rung, setRung] = useState<Set<string>>(new Set())
   const [chatOpen, setChatOpen] = useState(false)
-  const [toast, setToast] = useState(null)
+  const [toast, setToast] = useState<{ id: string; name: string; text: string } | null>(null)
   const canShare = !!navigator.mediaDevices?.getDisplayMedia
 
   // Meet-style presenting layout: the shared screen takes the stage (shown
@@ -451,7 +537,7 @@ function CallOverlay({
   const lastMsg = convo?.messages[convo.messages.length - 1]
   useEffect(() => {
     if (!lastMsg || lastMsg.kind !== 'peer' || chatOpen) return
-    setToast({ id: lastMsg.id, name: lastMsg.name ?? names(lastMsg.from), text: previewText(lastMsg, '') })
+    setToast({ id: lastMsg.id, name: lastMsg.name ?? names(lastMsg.from!), text: previewText(lastMsg, '') })
     const t = setTimeout(() => setToast(null), 4000)
     return () => clearTimeout(t)
   }, [lastMsg?.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -478,8 +564,8 @@ function CallOverlay({
                   muted={sharing}
                   className="stage-video"
                   allowUnmute={!sharing}
-                  label={sharing ? 'You are presenting' : `${names(remoteSharer)} is presenting`}
-                  personName={sharing ? 'You' : names(remoteSharer)}
+                  label={sharing ? 'You are presenting' : `${names(remoteSharer!)} is presenting`}
+                  personName={sharing ? 'You' : names(remoteSharer!)}
                   seed={sharing ? 'you' : remoteSharer}
                 />
                 <div className="filmstrip">
@@ -492,7 +578,7 @@ function CallOverlay({
             ) : remotes.length === 0 ? (
               <div className="call-waiting">
                 <span className="avatar big" style={{ background: avatarBg(avatarSeed ?? title), color: '#fff', borderColor: 'transparent' }}>
-                  {call.mode === 'group' ? Icon.users : initials(title)}
+                  {call.mode === 'group' ? Icon.users : initials(title ?? '')}
                 </span>
                 <p>{call.status === 'outgoing' ? `Calling ${title}…` : call.mode === 'group' ? 'Waiting for others to join…' : 'Connecting…'}</p>
               </div>
@@ -504,7 +590,7 @@ function CallOverlay({
               </div>
             )}
             {!presenting && <Video stream={localStream} muted className="local-video" personName="You" seed="you" forceAvatar={!camOn} isMicOff={!micOn} />}
-            
+
             {lowBandwidth && (
               <div className="chat-toast bw-toast">
                 Poor connection — video paused, audio continues. Tap the camera to turn it back on.
@@ -592,11 +678,18 @@ function CallOverlay({
   )
 }
 
-// generic online-contact picker (add members to a group)
-function MemberPicker({ title, contacts, onPick, onClose }) {
-  const [picked, setPicked] = useState(new Set())
+interface MemberPickerProps {
+  title: string
+  contacts: Contact[]
+  onPick: (ids: string[]) => void
+  onClose: () => void
+}
 
-  const toggle = (id) =>
+// generic online-contact picker (add members to a group)
+function MemberPicker({ title, contacts, onPick, onClose }: MemberPickerProps) {
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+
+  const toggle = (id: string) =>
     setPicked((prev) => {
       const next = new Set(prev)
       next.has(id) ? next.delete(id) : next.add(id)
@@ -641,7 +734,16 @@ function MemberPicker({ title, contacts, onPick, onClose }) {
   )
 }
 
-function IncomingCall({ title, subtitle, isGroup, avatarSeed, onAccept, onDecline }) {
+interface IncomingCallProps {
+  title: string
+  subtitle: string
+  isGroup: boolean
+  avatarSeed?: string
+  onAccept: () => void
+  onDecline: () => void
+}
+
+function IncomingCall({ title, subtitle, isGroup, avatarSeed, onAccept, onDecline }: IncomingCallProps) {
   return (
     <div className="incoming" role="alertdialog" aria-label={`Incoming call: ${title}`}>
       <span
@@ -665,7 +767,14 @@ function IncomingCall({ title, subtitle, isGroup, avatarSeed, onAccept, onDeclin
   )
 }
 
-function ForwardPicker({ rows, excludeId, onPick, onClose }) {
+interface ForwardPickerProps {
+  rows: SidebarRow[]
+  excludeId: string | null
+  onPick: (id: string) => void
+  onClose: () => void
+}
+
+function ForwardPicker({ rows, excludeId, onPick, onClose }: ForwardPickerProps) {
   const list = rows.filter((r) => r.id !== excludeId)
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -690,14 +799,15 @@ function ForwardPicker({ rows, excludeId, onPick, onClose }) {
     </div>
   )
 }
-function Shell({ name, username, onSignOut }) {
-  const [activeId, setActiveId] = useState('contacts')
+
+function Shell({ name, username, onSignOut }: { name: string; username: string; onSignOut: () => void }) {
+  const [activeId, setActiveId] = useState<string | null>('contacts')
   const [creatingGroup, setCreatingGroup] = useState(false)
   const [showProfile, setShowProfile] = useState(false)
   const [showInviteModal, setShowInviteModal] = useState(false)
-  const [addingTo, setAddingTo] = useState(null)
-  const [forwarding, setForwarding] = useState(null)
-  const [inviteCode, setInviteCode] = useState(() => {
+  const [addingTo, setAddingTo] = useState<string | null>(null)
+  const [forwarding, setForwarding] = useState<ConvoMessage | null>(null)
+  const [inviteCode, setInviteCode] = useState<string | null>(() => {
     const path = window.location.pathname
     if (path.startsWith('/invite/')) return path.split('/')[2]
     return null
@@ -713,23 +823,23 @@ function Shell({ name, username, onSignOut }) {
     notifyTyping, markRead, socketRef
   } = chat
 
-  function InviteModal({ socketRef, onClose }) {
-    const [inviteLink, setInviteLink] = useState(null)
+  function InviteModal({ socketRef, onClose }: { socketRef: RefObject<Socket | null>; onClose: () => void }) {
+    const [inviteLink, setInviteLink] = useState<string | null>(null)
     const [copied, setCopied] = useState(false)
 
     useEffect(() => {
       if (!socketRef.current) return
-      
-      const onInviteCreated = ({ code }) => {
+
+      const onInviteCreated = ({ code }: { code: string }) => {
         const baseUrl = window.location.origin
         setInviteLink(`${baseUrl}/invite/${code}`)
       }
-      
+
       socketRef.current.on('invite-created', onInviteCreated)
       socketRef.current.emit('create-invite', {})
-      
+
       return () => {
-        socketRef.current.off('invite-created', onInviteCreated)
+        socketRef.current?.off('invite-created', onInviteCreated)
       }
     }, [socketRef])
 
@@ -750,14 +860,14 @@ function Shell({ name, username, onSignOut }) {
           <p style={{ marginBottom: '16px', color: 'var(--muted)' }}>
             Share this link with someone to connect with them on Sable.
           </p>
-          
+
           {inviteLink ? (
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <input 
-                readOnly 
-                value={inviteLink} 
-                style={{ flex: 1, padding: '8px 12px', fontSize: '14px', borderRadius: 'var(--radius)' }} 
-                onClick={(e) => e.target.select()}
+              <input
+                readOnly
+                value={inviteLink}
+                style={{ flex: 1, padding: '8px 12px', fontSize: '14px', borderRadius: 'var(--radius)' }}
+                onClick={(e) => (e.target as HTMLInputElement).select()}
               />
               <button className="primary" onClick={copyToClipboard} style={{ padding: '0 16px', height: '48px' }}>
                 {copied ? 'Copied!' : 'Copy'}
@@ -780,37 +890,35 @@ function Shell({ name, username, onSignOut }) {
     const t = setTimeout(() => dismissAnnouncement(), 8000)
     return () => clearTimeout(t)
   }, [announcement, dismissAnnouncement])
+  const onLog: OnLog = (target, log) => addLocalEntry(target, { t: 'call', ...log } as unknown as ConvoMessage['body'], 'call')
   const {
     call, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, micsOff, quality, lowBandwidth,
     activeSince,
     startCall, startGroupCall, accept, decline, hangup, toggleMic, toggleCam, toggleShare, inviteToCall,
-  } = useCall(socketRef, clientId, (target, log) => addLocalEntry(target, { t: 'call', ...log }))
-
-  const [inviting, setInviting] = useState(false)
+  } = useCall(socketRef, clientId, onLog)
 
   // merged sidebar rows: groups + contacts, most recent first
-  const sidebarRows = [
-    ...groups.map((g) => ({ ...g, isGroup: true, memberCount: g.members.length })),
+  const sidebarRows: SidebarRow[] = [
+    ...groups.map((g) => ({ ...g, isGroup: true as const, memberCount: g.members.length })),
     ...contacts.filter(c => c.status === 'accepted'),
   ].sort((a, b) => {
-    const tsA = Math.max(convos[a.id]?.lastTs || 0, a.lastSeen || 0)
-    const tsB = Math.max(convos[b.id]?.lastTs || 0, b.lastSeen || 0)
+    const tsA = Math.max(convos[a.id]?.lastTs || 0, ('lastSeen' in a ? a.lastSeen : 0) || 0)
+    const tsB = Math.max(convos[b.id]?.lastTs || 0, ('lastSeen' in b ? b.lastSeen : 0) || 0)
     return tsB - tsA
   })
 
   // resolve the open thread target (direct contact or group)
   const activeContact = contacts.find((c) => c.id === activeId)
   const activeGroup = groups.find((g) => g.id === activeId)
-  const activePeerName = activeGroup ? activeGroup.name : activeContact?.name
 
-  const forward = async (targetId, msg) => {
+  const forward = async (targetId: string, msg: ConvoMessage) => {
     const body = msg.body
-    if (body.t === 'file') {
-      const buf = await (await fetch(body.url)).arrayBuffer()
-      const { b64encode } = await import('./crypto.js')
+    if ('t' in body && body.t === 'file') {
+      const buf = await (await fetch(body.url!)).arrayBuffer()
+      const { b64encode } = await import('./crypto.ts')
       send(targetId, { ...body, url: undefined, data: b64encode(buf), fwd: true })
     } else {
-      send(targetId, { ...body, fwd: true })
+      send(targetId, { ...body, fwd: true } as ConvoMessage['body'] as Parameters<typeof send>[1])
     }
     setActiveId(targetId)
   }
@@ -861,6 +969,8 @@ function Shell({ name, username, onSignOut }) {
     )
   }
 
+  const callTargetId = call.groupId ?? call.peerId ?? ''
+
   return (
     <div className={`shell ${activeId ? 'thread-open' : ''}`}>
       <Sidebar
@@ -878,9 +988,9 @@ function Shell({ name, username, onSignOut }) {
       />
       <main className="call-stage with-chat">
         {inviteCode ? (
-          <InvitePage 
-            code={inviteCode} 
-            socketRef={socketRef} 
+          <InvitePage
+            code={inviteCode}
+            socketRef={socketRef}
             onJoin={(userId) => {
               sendContactRequest(userId)
               setInviteCode(null)
@@ -912,9 +1022,9 @@ function Shell({ name, username, onSignOut }) {
             onToggleCam={toggleCam}
             onToggleShare={toggleShare}
             onHangup={hangup}
-            convo={convos[call.groupId ?? call.peerId]}
-            onSendChat={(text) => send(call.groupId ?? call.peerId, { t: 'text', text })}
-            onReadChat={() => markRead(call.groupId ?? call.peerId)}
+            convo={convos[callTargetId]}
+            onSendChat={(text) => send(callTargetId, { t: 'text', text })}
+            onReadChat={() => markRead(callTargetId)}
             inviteCandidates={
               call.groupId
                 ? (groups.find((g) => g.id === call.groupId)?.members ?? []).filter(
@@ -925,9 +1035,9 @@ function Shell({ name, username, onSignOut }) {
             onInvite={inviteToCall}
           />
         ) : activeId === 'contacts' ? (
-          <ContactsPage 
+          <ContactsPage
             clientId={clientId}
-            contacts={contacts} 
+            contacts={contacts}
             onChat={(id) => setActiveId(id)}
             onVoiceCall={(id) => startCall(id, false)}
             onVideoCall={(id) => startCall(id, true)}
@@ -942,7 +1052,7 @@ function Shell({ name, username, onSignOut }) {
         ) : activeId ? (
           <Thread
             key={activeId}
-            target={activeGroup ? { ...activeGroup, isGroup: true } : { ...activeContact, isGroup: false }}
+            target={(activeGroup ? { ...activeGroup, isGroup: true } : { ...activeContact, isGroup: false }) as ChatTarget}
             convo={convos[activeId]}
             clientId={clientId}
             onBack={() => setActiveId(null)}
@@ -1000,8 +1110,8 @@ function Shell({ name, username, onSignOut }) {
 
       {showProfile && (
         <ProfileSettingsModal
-          user={myProfile || { name, username }}
-          socket={socketRef.current}
+          user={(myProfile || { name, username }) as MyProfile}
+          socket={socketRef.current!}
           blockedContacts={contacts.filter(c => c.status === 'blocked' && c.isRequester)}
           unblockContact={unblockContact}
           passkeys={passkeys}
@@ -1039,7 +1149,7 @@ function Shell({ name, username, onSignOut }) {
           avatarSeed={call.groupId ?? call.peerId}
           onAccept={() => {
             accept()
-            setActiveId(call.groupId ?? call.peerId)
+            setActiveId(call.groupId ?? call.peerId ?? null)
           }}
           onDecline={decline}
         />
@@ -1070,10 +1180,10 @@ function Shell({ name, username, onSignOut }) {
 }
 
 export default function App() {
-  const [session, setSession] = useState(() => {
+  const [session, setSession] = useState<Session | null>(() => {
     const name = localStorage.getItem('sable-name')
     const username = localStorage.getItem('sable-username')
-    return name ? { name, username } : null
+    return name && username ? { name, username } : null
   })
 
   if (!session) return <Welcome onEnter={setSession} />

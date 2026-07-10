@@ -6,25 +6,36 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "concurrently -k -n server,client -c cyan,magenta \"node --env-file=.env.local server/index.js\" \"vite\"",
-    "server": "node --env-file=.env.local server/index.js",
-    "build": "vite build",
+    "dev": "concurrently -k -n server,client -c cyan,magenta \"npm:server\" \"vite\"",
+    "server": "tsx --env-file=.env.local server/index.ts",
+    "typecheck": "tsc -b",
+    "build": "tsc -b tsconfig.app.json && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
     "@libsql/client": "^0.17.4",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
     "hugeicons-react": "^0.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
+    "tsx": "^4.23.0",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/web-push": "^3.6.4",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.0",
+    "typescript": "^7.0.2",
     "vite": "^6.0.0"
   }
 }

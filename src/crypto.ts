@@ -1,9 +1,10 @@
 // End-to-end encryption via Web Crypto: ECDH P-256 key agreement,
 // AES-256-GCM per message. Private keys are non-extractable and never leave the browser.
+import type { EncryptedPayload } from './types.ts'
 
 // Chunked base64 — String.fromCharCode(...bigArray) blows the stack on large files.
-export function b64encode(buf) {
-  const bytes = new Uint8Array(buf)
+export function b64encode(buf: ArrayBuffer | ArrayBufferView): string {
+  const bytes = new Uint8Array(buf instanceof ArrayBuffer ? buf : buf.buffer as ArrayBuffer)
   let out = ''
   for (let i = 0; i < bytes.length; i += 8192) {
     out += String.fromCharCode(...bytes.subarray(i, i + 8192))
@@ -11,20 +12,20 @@ export function b64encode(buf) {
   return btoa(out)
 }
 
-export function b64decode(str) {
+export function b64decode(str: string): Uint8Array {
   const bin = atob(str)
   const bytes = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
   return bytes
 }
 
-export async function generateKeyPair() {
-  return crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveKey'])
+export async function generateKeyPair(): Promise<CryptoKeyPair> {
+  return crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveKey']) as Promise<CryptoKeyPair>
 }
 
 // Persistent identity keys: CryptoKey objects survive in IndexedDB while
 // staying non-extractable — history stays decryptable across restarts.
-const openKeyStore = () =>
+const openKeyStore = (): Promise<IDBDatabase> =>
   new Promise((resolve, reject) => {
     const req = indexedDB.open('sable-crypto', 1)
     req.onupgradeneeded = () => req.result.createObjectStore('keys')
@@ -32,19 +33,19 @@ const openKeyStore = () =>
     req.onerror = () => reject(req.error)
   })
 
-export async function loadKeyPair() {
+export async function loadKeyPair(): Promise<CryptoKeyPair> {
   try {
     const dbi = await openKeyStore()
-    const existing = await new Promise((resolve, reject) => {
+    const existing = await new Promise<CryptoKeyPair | undefined>((resolve, reject) => {
       const t = dbi.transaction('keys').objectStore('keys').get('ecdh')
       t.onsuccess = () => resolve(t.result)
       t.onerror = () => reject(t.error)
     })
     if (existing?.privateKey) return existing
     const pair = await generateKeyPair()
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const t = dbi.transaction('keys', 'readwrite').objectStore('keys').put(pair, 'ecdh')
-      t.onsuccess = resolve
+      t.onsuccess = () => resolve()
       t.onerror = () => reject(t.error)
     })
     return pair
@@ -53,11 +54,11 @@ export async function loadKeyPair() {
   }
 }
 
-export async function exportPublicKey(keyPair) {
+export async function exportPublicKey(keyPair: CryptoKeyPair): Promise<JsonWebKey> {
   return crypto.subtle.exportKey('jwk', keyPair.publicKey)
 }
 
-export async function deriveSharedKey(privateKey, peerJwk) {
+export async function deriveSharedKey(privateKey: CryptoKey, peerJwk: JsonWebKey): Promise<CryptoKey> {
   const peerKey = await crypto.subtle.importKey(
     'jwk',
     peerJwk,
@@ -66,7 +67,7 @@ export async function deriveSharedKey(privateKey, peerJwk) {
     []
   )
   return crypto.subtle.deriveKey(
-    { name: 'ECDH', public: peerKey },
+    { name: 'ECDH', public: peerKey } as EcdhKeyDeriveParams,
     privateKey,
     { name: 'AES-GCM', length: 256 },
     false,
@@ -74,21 +75,21 @@ export async function deriveSharedKey(privateKey, peerJwk) {
   )
 }
 
-export async function encrypt(key, text) {
+export async function encrypt(key: CryptoKey, text: string): Promise<EncryptedPayload> {
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(text))
   return { iv: b64encode(iv), ct: b64encode(ct) }
 }
 
-export async function decrypt(key, { iv, ct }) {
-  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64decode(iv) }, key, b64decode(ct))
+export async function decrypt(key: CryptoKey, { iv, ct }: EncryptedPayload): Promise<string> {
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64decode(iv) as BufferSource }, key, b64decode(ct) as BufferSource)
   return new TextDecoder().decode(pt)
 }
 
 // Short safety code from a public key, for out-of-band verification.
-export async function fingerprint(jwk) {
-  const data = new TextEncoder().encode(jwk.x + jwk.y)
+export async function fingerprint(jwk: JsonWebKey): Promise<string> {
+  const data = new TextEncoder().encode((jwk.x ?? '') + (jwk.y ?? ''))
   const hash = await crypto.subtle.digest('SHA-256', data)
   const hex = [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('')
-  return hex.slice(0, 12).match(/.{4}/g).join(' ')
+  return hex.slice(0, 12).match(/.{4}/g)!.join(' ')
 }

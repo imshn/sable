@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react'
-import { Icon } from './icons.jsx'
+import { useState, useEffect } from 'react'
+import type { Socket } from 'socket.io-client'
+import { Icon } from './icons.tsx'
+import type { SessionRow, LoginHistoryRow, Passkey, PasskeyActionResult } from './types.ts'
 
-const RELATIVE = (ts) => {
+const RELATIVE = (ts: number | null | undefined) => {
   if (!ts) return 'Unknown'
   const diff = Date.now() - Number(ts)
   if (diff < 60_000) return 'Just now'
@@ -10,27 +12,35 @@ const RELATIVE = (ts) => {
   return new Date(Number(ts)).toLocaleDateString()
 }
 
-const deviceLabel = (t) => (t === 'singleDevice' ? 'This device only' : t === 'multiDevice' ? 'Synced (phone/cloud)' : 'Unknown type')
+const deviceLabel = (t: string) => (t === 'singleDevice' ? 'This device only' : t === 'multiDevice' ? 'Synced (phone/cloud)' : 'Unknown type')
 
-export function SecurityPage({ socket, passkeys, onFetchPasskeys, onDeletePasskey, onRegisterPasskey }) {
-  const [sessions, setSessions] = useState(null)
-  const [history, setHistory] = useState(null)
-  const [revoking, setRevoking] = useState(null)
+interface SecurityPageProps {
+  socket: Socket | null | undefined
+  passkeys: Passkey[] | null
+  onFetchPasskeys?: () => void
+  onDeletePasskey?: (credentialId: string) => void
+  onRegisterPasskey?: () => Promise<PasskeyActionResult>
+}
+
+export function SecurityPage({ socket, passkeys, onFetchPasskeys, onDeletePasskey, onRegisterPasskey }: SecurityPageProps) {
+  const [sessions, setSessions] = useState<SessionRow[] | null>(null)
+  const [history, setHistory] = useState<LoginHistoryRow[] | null>(null)
+  const [revoking, setRevoking] = useState<string | null>(null)
   const [confirmed, setConfirmed] = useState(false)
   const [addingPasskey, setAddingPasskey] = useState(false)
-  const [passkeyMsg, setPasskeyMsg] = useState(null) // { text, error }
+  const [passkeyMsg, setPasskeyMsg] = useState<{ text: string; error?: boolean } | null>(null)
 
   useEffect(() => {
     if (!socket) return
-    const handle = (s) => setSessions(s)
+    const handle = (s: SessionRow[]) => setSessions(s)
     socket.on('sessions', handle)
-    socket.emit('get-sessions', (s) => setSessions(s))
-    return () => socket.off('sessions', handle)
+    socket.emit('get-sessions', (s: SessionRow[]) => setSessions(s))
+    return () => { socket.off('sessions', handle) }
   }, [socket])
 
   useEffect(() => {
     if (!socket) return
-    socket.emit('get-login-history', (rows) => setHistory(rows))
+    socket.emit('get-login-history', (rows: LoginHistoryRow[]) => setHistory(rows))
   }, [socket])
 
   useEffect(() => {
@@ -46,7 +56,7 @@ export function SecurityPage({ socket, passkeys, onFetchPasskeys, onDeletePasske
     else if (res?.error !== 'Cancelled') setPasskeyMsg({ text: res?.error ?? 'Could not add passkey', error: true })
   }
 
-  const revoke = (sessionId) => {
+  const revoke = (sessionId: string) => {
     setRevoking(sessionId)
     socket?.emit('revoke-session', { sessionId })
     setTimeout(() => setRevoking(null), 1000)

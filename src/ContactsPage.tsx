@@ -1,9 +1,25 @@
-import React, { useState, useEffect, useMemo } from 'react'
-import { Icon } from './icons.jsx'
-import { ConfirmModal } from './ConfirmModal.jsx'
-import { avatarBg } from './avatarColor.js'
+import { useState, useEffect, useMemo, type ReactNode } from 'react'
+import type { RefObject } from 'react'
+import type { Socket } from 'socket.io-client'
+import { Icon } from './icons.tsx'
+import { ConfirmModal } from './ConfirmModal.tsx'
+import { avatarBg } from './avatarColor.ts'
+import type { Contact, SearchUser } from './types.ts'
 
-function Row({ id, name, username, online, trailing, sub, active, onClick }) {
+type ContactsTab = 'contacts' | 'requests' | 'search'
+
+interface RowProps {
+  id: string
+  name: string
+  username: string
+  online?: boolean
+  trailing?: ReactNode
+  sub?: ReactNode
+  active: boolean
+  onClick: () => void
+}
+
+function Row({ id, name, username, online, trailing, sub, active, onClick }: RowProps) {
   return (
     <button type="button" className={`contact ${active ? 'active' : ''}`} onClick={onClick}>
       <span className="avatar-wrap">
@@ -25,7 +41,14 @@ function Row({ id, name, username, online, trailing, sub, active, onClick }) {
   )
 }
 
-function EmptyState({ icon, title, hint, action }) {
+interface EmptyStateProps {
+  icon: ReactNode
+  title: string
+  hint?: string
+  action?: ReactNode
+}
+
+function EmptyState({ icon, title, hint, action }: EmptyStateProps) {
   return (
     <div className="empty">
       <div className="empty-glyph">{icon}</div>
@@ -36,21 +59,43 @@ function EmptyState({ icon, title, hint, action }) {
   )
 }
 
-export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoCall, sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, blockContact, unblockContact, socketRef }) {
-  const [activeTab, setActiveTab] = useState('contacts') // contacts, requests, search
+type Selected =
+  | { kind: 'contact'; person: Contact }
+  | { kind: 'incoming'; person: Contact }
+  | { kind: 'sent'; person: Contact }
+  | { kind: 'search'; person: SearchUser; existingContact?: Contact }
+  | null
+
+interface ContactsPageProps {
+  clientId: string
+  contacts: Contact[]
+  onChat: (id: string) => void
+  onVoiceCall: (id: string) => void
+  onVideoCall: (id: string) => void
+  sendContactRequest: (id: string) => void
+  acceptContactRequest: (id: string) => void
+  rejectContactRequest: (id: string) => void
+  removeContact: (id: string) => void
+  blockContact: (id: string) => void
+  unblockContact: (id: string) => void
+  socketRef: RefObject<Socket | null>
+}
+
+export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoCall, sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, blockContact, unblockContact: _unblockContact, socketRef: _socketRef }: ContactsPageProps) {
+  const [activeTab, setActiveTab] = useState<ContactsTab>('contacts')
   const [filter, setFilter] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
-  const [searchResults, setSearchResults] = useState([])
+  const [searchResults, setSearchResults] = useState<SearchUser[]>([])
   const [isSearching, setIsSearching] = useState(false)
-  const [userToBlock, setUserToBlock] = useState(null)
-  const [userToRemove, setUserToRemove] = useState(null)
-  const [selectedId, setSelectedId] = useState(null)
+  const [userToBlock, setUserToBlock] = useState<Contact | null>(null)
+  const [userToRemove, setUserToRemove] = useState<Contact | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const pendingRequests = contacts.filter(c => c.status === 'pending' && !c.isRequester)
   const sentRequests = contacts.filter(c => c.status === 'pending' && c.isRequester)
   const acceptedContacts = contacts.filter(c => c.status === 'accepted')
 
-  const switchTab = (tab) => { setActiveTab(tab); setSelectedId(null) }
+  const switchTab = (tab: ContactsTab) => { setActiveTab(tab); setSelectedId(null) }
 
   const filteredContacts = useMemo(() => {
     const q = filter.trim().toLowerCase()
@@ -68,7 +113,7 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
           const baseUrl = import.meta.env.VITE_RELAY_URL || ''
           const res = await fetch(`${baseUrl}/api/search?q=${encodeURIComponent(searchQuery)}&uid=${encodeURIComponent(clientId)}`)
           if (res.ok && active) {
-            const data = await res.json()
+            const data: SearchUser[] = await res.json()
             setSearchResults(data.filter(u => u.id !== clientId))
           }
         } catch (e) {
@@ -90,7 +135,7 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
   // Re-derived from live data every render — so the detail pane never goes
   // stale, and clears itself naturally if the selected person disappears
   // (request accepted/cancelled elsewhere, contact removed, etc).
-  const selected = useMemo(() => {
+  const selected: Selected = useMemo(() => {
     if (!selectedId) return null
     const c = acceptedContacts.find(x => x.id === selectedId)
     if (c) return { kind: 'contact', person: c }
@@ -235,7 +280,8 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
       return <EmptyState icon={Icon.users} title="Select someone" hint="Pick a person on the left to see details." />
     }
 
-    const { kind, person, existingContact } = selected
+    const { kind, person } = selected
+    const existingContact = selected.kind === 'search' ? selected.existingContact : undefined
     return (
       <div className="profile-detail">
         <span className="avatar-wrap">

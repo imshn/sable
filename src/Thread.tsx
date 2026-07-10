@@ -1,26 +1,28 @@
-import { useEffect, useRef, useState } from 'react'
-import { Icon } from './icons.jsx'
-import { b64encode } from './crypto.js'
-import { ConfirmModal } from './ConfirmModal.jsx'
-import { ReportModal } from './ReportModal.jsx'
+import { useEffect, useRef, useState, type RefObject, type FormEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ChangeEvent, type KeyboardEvent } from 'react'
+import type { Socket } from 'socket.io-client'
+import { Icon } from './icons.tsx'
+import { b64encode } from './crypto.ts'
+import { ConfirmModal } from './ConfirmModal.tsx'
+import { ReportModal } from './ReportModal.tsx'
+import type { ChatTarget, Convo, ConvoMessage, CallLogBody, FileBody, GroupMember, MentionRef, MessageBody, OutgoingEnvelope, ReplyRef } from './types.ts'
 
 const timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
-const initials = (n) => n.trim().slice(0, 2).toUpperCase()
+const initials = (n: string) => n.trim().slice(0, 2).toUpperCase()
 const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
 const MAX_FILE = 15 * 1024 * 1024
 
-const fmtSize = (bytes) => {
+const fmtSize = (bytes: number) => {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1048576).toFixed(1)} MB`
 }
 
-const fmtDur = (ms) => {
+const fmtDur = (ms: number) => {
   const s = Math.round(ms / 1000)
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
-export const callLogText = (body, peerName) =>
+export const callLogText = (body: CallLogBody, peerName: string): string =>
   ({
     ended: `Video call · ${fmtDur(body.dur ?? 0)}`,
     missed: 'Missed video call',
@@ -30,11 +32,11 @@ export const callLogText = (body, peerName) =>
   })[body.kind] ?? 'Video call'
 
 // short description of a message for reply quotes / the reply bar
-export const replyPreviewOf = (m) => {
+export const replyPreviewOf = (m: ConvoMessage): string => {
   if (m.deleted) return 'Message deleted'
   const b = m.body
-  if (b.t === 'loc') return 'Location'
-  if (b.t === 'file') {
+  if ('t' in b && b.t === 'loc') return 'Location'
+  if ('t' in b && b.t === 'file') {
     if (b.caption) return b.caption.slice(0, 120)
     if (b.voice) return 'Voice message'
     if (b.mime?.startsWith('image/')) return 'Photo'
@@ -42,14 +44,14 @@ export const replyPreviewOf = (m) => {
     if (b.mime?.startsWith('audio/')) return 'Audio'
     return b.name
   }
-  return (b.text ?? '').slice(0, 120)
+  return ('text' in b ? b.text : '').slice(0, 120)
 }
 
-const isMedia = (m) =>
-  !m.deleted && m.body?.t === 'file' && (m.body.mime?.startsWith('image/') || m.body.mime?.startsWith('video/'))
+const isMedia = (m: ConvoMessage): m is ConvoMessage & { body: FileBody } =>
+  !m.deleted && 't' in m.body && m.body.t === 'file' && (!!m.body.mime?.startsWith('image/') || !!m.body.mime?.startsWith('video/'))
 
 // file (+ optional caption) -> encrypted-envelope payload
-async function fileEnvelope(file, caption) {
+async function fileEnvelope(file: File, caption: string): Promise<FileBody> {
   const buf = await file.arrayBuffer()
   return {
     t: 'file',
@@ -63,24 +65,44 @@ async function fileEnvelope(file, caption) {
 
 const DRAW_COLORS = ['#ef4444', '#facc15', '#22c55e', '#3b82f6', '#f9fafb']
 
+interface HistoryFrame {
+  w: number
+  h: number
+  data: ImageData
+}
+
+interface CropRect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+interface SendPreviewProps {
+  file: File
+  remaining: number
+  onSend: (file: File, caption: string) => void
+  onCancel: () => void
+}
+
 // WhatsApp-style pre-send preview: caption for any file, plus draw / rotate /
 // crop / undo for images (canvas pipeline; original bytes kept if untouched).
-function SendPreview({ file, remaining, onSend, onCancel }) {
+function SendPreview({ file, remaining, onSend, onCancel }: SendPreviewProps) {
   const isImage = file.type.startsWith('image/')
   const isVideo = file.type.startsWith('video/')
   const [caption, setCaption] = useState('')
-  const [tool, setTool] = useState(null) // null | 'draw' | 'crop'
+  const [tool, setTool] = useState<'draw' | 'crop' | null>(null)
   const [color, setColor] = useState(DRAW_COLORS[0])
   const [canUndo, setCanUndo] = useState(false)
   const [cropReady, setCropReady] = useState(false)
-  const canvasRef = useRef(null)
-  const mediaUrl = useRef(null)
-  const history = useRef([])
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const mediaUrl = useRef<string | null>(null)
+  const history = useRef<HistoryFrame[]>([])
   const edited = useRef(false)
   const drawing = useRef(false)
-  const cropStart = useRef(null)
-  const cropRect = useRef(null)
-  const cropBase = useRef(null) // ImageData under the marquee preview
+  const cropStart = useRef<{ x: number; y: number } | null>(null)
+  const cropRect = useRef<CropRect | null>(null)
+  const cropBase = useRef<ImageData | null>(null) // ImageData under the marquee preview
 
   if (!mediaUrl.current) mediaUrl.current = URL.createObjectURL(file)
 
@@ -92,15 +114,15 @@ function SendPreview({ file, remaining, onSend, onCancel }) {
       if (!c) return
       c.width = img.naturalWidth
       c.height = img.naturalHeight
-      c.getContext('2d').drawImage(img, 0, 0)
+      c.getContext('2d')!.drawImage(img, 0, 0)
     }
-    img.src = mediaUrl.current
-    return () => URL.revokeObjectURL(mediaUrl.current)
+    img.src = mediaUrl.current!
+    return () => URL.revokeObjectURL(mediaUrl.current!)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const snapshot = () => {
-    const c = canvasRef.current
-    history.current.push({ w: c.width, h: c.height, data: c.getContext('2d').getImageData(0, 0, c.width, c.height) })
+    const c = canvasRef.current!
+    history.current.push({ w: c.width, h: c.height, data: c.getContext('2d')!.getImageData(0, 0, c.width, c.height) })
     if (history.current.length > 10) history.current.shift()
     edited.current = true
     setCanUndo(true)
@@ -109,32 +131,32 @@ function SendPreview({ file, remaining, onSend, onCancel }) {
   const undo = () => {
     const prev = history.current.pop()
     if (!prev) return
-    const c = canvasRef.current
+    const c = canvasRef.current!
     c.width = prev.w
     c.height = prev.h
-    c.getContext('2d').putImageData(prev.data, 0, 0)
+    c.getContext('2d')!.putImageData(prev.data, 0, 0)
     setCanUndo(history.current.length > 0)
     cancelCrop()
   }
 
   const rotate = () => {
     snapshot()
-    const c = canvasRef.current
+    const c = canvasRef.current!
     const tmp = document.createElement('canvas')
     tmp.width = c.height
     tmp.height = c.width
-    const t = tmp.getContext('2d')
+    const t = tmp.getContext('2d')!
     t.translate(tmp.width / 2, tmp.height / 2)
     t.rotate(Math.PI / 2)
     t.drawImage(c, -c.width / 2, -c.height / 2)
     c.width = tmp.width
     c.height = tmp.height
-    c.getContext('2d').drawImage(tmp, 0, 0)
+    c.getContext('2d')!.drawImage(tmp, 0, 0)
     cancelCrop()
   }
 
-  const canvasPoint = (e) => {
-    const c = canvasRef.current
+  const canvasPoint = (e: ReactPointerEvent) => {
+    const c = canvasRef.current!
     const r = c.getBoundingClientRect()
     return {
       x: Math.max(0, Math.min(c.width, (e.clientX - r.left) * (c.width / r.width))),
@@ -142,22 +164,22 @@ function SendPreview({ file, remaining, onSend, onCancel }) {
     }
   }
 
-  const onPointerDown = (e) => {
+  const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!tool) return
     e.currentTarget.setPointerCapture(e.pointerId)
     const p = canvasPoint(e)
-    const ctx = canvasRef.current.getContext('2d')
+    const ctx = canvasRef.current!.getContext('2d')!
     if (tool === 'draw') {
       snapshot()
       drawing.current = true
       ctx.strokeStyle = color
-      ctx.lineWidth = Math.max(4, canvasRef.current.width / 160)
+      ctx.lineWidth = Math.max(4, canvasRef.current!.width / 160)
       ctx.lineCap = 'round'
       ctx.lineJoin = 'round'
       ctx.beginPath()
       ctx.moveTo(p.x, p.y)
     } else if (tool === 'crop') {
-      const c = canvasRef.current
+      const c = canvasRef.current!
       if (!cropBase.current) cropBase.current = ctx.getImageData(0, 0, c.width, c.height)
       cropStart.current = p
       cropRect.current = null
@@ -165,11 +187,11 @@ function SendPreview({ file, remaining, onSend, onCancel }) {
     }
   }
 
-  const onPointerMove = (e) => {
+  const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!tool) return
     const p = canvasPoint(e)
-    const c = canvasRef.current
-    const ctx = c.getContext('2d')
+    const c = canvasRef.current!
+    const ctx = c.getContext('2d')!
     if (tool === 'draw' && drawing.current) {
       ctx.lineTo(p.x, p.y)
       ctx.stroke()
@@ -182,11 +204,11 @@ function SendPreview({ file, remaining, onSend, onCancel }) {
         h: Math.round(Math.abs(p.y - s.y)),
       }
       cropRect.current = rect
-      ctx.putImageData(cropBase.current, 0, 0)
+      ctx.putImageData(cropBase.current!, 0, 0)
       ctx.fillStyle = 'rgba(0,0,0,0.5)'
       ctx.fillRect(0, 0, c.width, c.height)
       // restore the selected region at full brightness
-      ctx.putImageData(cropBase.current, 0, 0, rect.x, rect.y, rect.w, rect.h)
+      ctx.putImageData(cropBase.current!, 0, 0, rect.x, rect.y, rect.w, rect.h)
       ctx.strokeStyle = '#2dd4bf'
       ctx.lineWidth = Math.max(2, c.width / 400)
       ctx.setLineDash([8, 6])
@@ -207,7 +229,7 @@ function SendPreview({ file, remaining, onSend, onCancel }) {
     if (cropBase.current && canvasRef.current) {
       const c = canvasRef.current
       if (cropBase.current.width === c.width && cropBase.current.height === c.height) {
-        c.getContext('2d').putImageData(cropBase.current, 0, 0)
+        c.getContext('2d')!.putImageData(cropBase.current, 0, 0)
       }
     }
     cropBase.current = null
@@ -221,15 +243,15 @@ function SendPreview({ file, remaining, onSend, onCancel }) {
     const base = cropBase.current
     if (!rect || !base) return
     snapshot()
-    const c = canvasRef.current
-    c.getContext('2d').putImageData(base, 0, 0) // clean image, no marquee
+    const c = canvasRef.current!
+    c.getContext('2d')!.putImageData(base, 0, 0) // clean image, no marquee
     const tmp = document.createElement('canvas')
     tmp.width = rect.w
     tmp.height = rect.h
-    tmp.getContext('2d').drawImage(c, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h)
+    tmp.getContext('2d')!.drawImage(c, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h)
     c.width = rect.w
     c.height = rect.h
-    c.getContext('2d').drawImage(tmp, 0, 0)
+    c.getContext('2d')!.drawImage(tmp, 0, 0)
     cropBase.current = null
     cropRect.current = null
     setCropReady(false)
@@ -241,8 +263,8 @@ function SendPreview({ file, remaining, onSend, onCancel }) {
     if (isImage && edited.current) {
       if (tool === 'crop') cancelCrop()
       const type = file.type === 'image/png' ? 'image/png' : 'image/jpeg'
-      const blob = await new Promise((res) => canvasRef.current.toBlob(res, type, 0.92))
-      out = new File([blob], file.name.replace(/\.\w+$/, type === 'image/png' ? '.png' : '.jpg'), { type })
+      const blob = await new Promise<Blob | null>((res) => canvasRef.current!.toBlob(res, type, 0.92))
+      if (blob) out = new File([blob], file.name.replace(/\.\w+$/, type === 'image/png' ? '.png' : '.jpg'), { type })
     }
     onSend(out, caption.trim())
   }
@@ -341,9 +363,9 @@ function SendPreview({ file, remaining, onSend, onCancel }) {
 // URLs become safe anchors; @mentions (when the message carries a mentions
 // list) become highlighted tags. Both share one pass so ranges never overlap.
 const URL_RE = /(https?:\/\/[^\s<>"']+)/g
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-export function Linkified({ text, mentions }) {
+export function Linkified({ text, mentions }: { text: string; mentions?: MentionRef[] }) {
   const names = mentions?.length
     ? [...new Set(mentions.map((m) => m.name))].sort((a, b) => b.length - a.length).map(escapeRe)
     : []
@@ -351,10 +373,10 @@ export function Linkified({ text, mentions }) {
     ? new RegExp(`(https?://[^\\s<>"']+)|(@(?:${names.join('|')})\\b)`, 'g')
     : new RegExp(URL_RE.source, 'g')
 
-  const nodes = []
+  const nodes: (string | React.ReactElement)[] = []
   let last = 0
   let key = 0
-  let m
+  let m: RegExpExecArray | null
   while ((m = re.exec(text))) {
     if (m.index > last) nodes.push(text.slice(last, m.index))
     nodes.push(
@@ -373,10 +395,16 @@ export function Linkified({ text, mentions }) {
 // OG-card preview for the first link in a message, WhatsApp style.
 // The relay's /preview endpoint does the fetch (CORS blocks doing it here).
 const RELAY_BASE = import.meta.env.VITE_RELAY_URL ?? ''
-const previewCache = new Map()
+interface PreviewData {
+  title?: string
+  description?: string
+  image?: string
+  site?: string
+}
+const previewCache = new Map<string, PreviewData>()
 
-function LinkPreview({ url }) {
-  const [data, setData] = useState(previewCache.get(url))
+function LinkPreview({ url }: { url: string }) {
+  const [data, setData] = useState<PreviewData | undefined>(previewCache.get(url))
 
   useEffect(() => {
     if (previewCache.has(url)) {
@@ -399,7 +427,7 @@ function LinkPreview({ url }) {
   if (!data?.title && !data?.image) return null
   return (
     <a className="link-preview" href={url} target="_blank" rel="noopener noreferrer">
-      {data.image && <img src={data.image} alt="" loading="lazy" onError={(e) => { e.target.style.display = 'none' }} />}
+      {data.image && <img src={data.image} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />}
       <span className="lp-body">
         {data.title && <span className="lp-title">{data.title}</span>}
         {data.description && <span className="lp-desc">{data.description}</span>}
@@ -409,8 +437,8 @@ function LinkPreview({ url }) {
   )
 }
 
-function MessageBody({ body, onOpenMedia }) {
-  if (body.t === 'loc') {
+function MessageBodyView({ body, onOpenMedia }: { body: MessageBody; onOpenMedia: () => void }) {
+  if ('t' in body && body.t === 'loc') {
     const { lat, lng } = body
     const d = 0.004
     return (
@@ -426,7 +454,7 @@ function MessageBody({ body, onOpenMedia }) {
       </span>
     )
   }
-  if (body.t === 'file') {
+  if ('t' in body && body.t === 'file') {
     const caption = body.caption ? (
       <span className="file-caption"><Linkified text={body.caption} /></span>
     ) : null
@@ -473,24 +501,43 @@ function MessageBody({ body, onOpenMedia }) {
       </>
     )
   }
-  const firstUrl = body.text.match(URL_RE)?.[0]
-  if (!firstUrl) return <Linkified text={body.text} mentions={body.mentions} />
+  const text = 'text' in body ? body.text : ''
+  const mentions = 'mentions' in body ? body.mentions : undefined
+  const firstUrl = text.match(URL_RE)?.[0]
+  if (!firstUrl) return <Linkified text={text} mentions={mentions} />
   return (
     <span className="text-with-preview">
       <LinkPreview url={firstUrl} />
-      <span><Linkified text={body.text} mentions={body.mentions} /></span>
+      <span><Linkified text={text} mentions={mentions} /></span>
     </span>
   )
 }
 
-function ContextMenu({ menu, onClose, onReact, onReply, onCopy, onForward, onDeleteMe, onDeleteAll }) {
-  const ref = useRef(null)
+interface MenuState {
+  msg: ConvoMessage
+  x: number
+  y: number
+}
+
+interface ContextMenuProps {
+  menu: MenuState
+  onClose: () => void
+  onReact: (emoji: string | null) => void
+  onReply: () => void
+  onCopy: () => void
+  onForward: () => void
+  onDeleteMe: () => void
+  onDeleteAll: () => void
+}
+
+function ContextMenu({ menu, onClose, onReact, onReply, onCopy, onForward, onDeleteMe, onDeleteAll }: ContextMenuProps) {
+  const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const close = (e) => {
-      if (!ref.current?.contains(e.target)) onClose()
+    const close = (e: globalThis.MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) onClose()
     }
-    const esc = (e) => e.key === 'Escape' && onClose()
+    const esc = (e: globalThis.KeyboardEvent) => e.key === 'Escape' && onClose()
     document.addEventListener('mousedown', close)
     document.addEventListener('keydown', esc)
     return () => {
@@ -522,7 +569,7 @@ function ContextMenu({ menu, onClose, onReact, onReply, onCopy, onForward, onDel
       <button className="ctx-item" role="menuitem" onClick={() => { onReply(); onClose() }}>
         {Icon.reply} Reply
       </button>
-      {msg.body.t === 'text' && (
+      {'t' in msg.body && msg.body.t === 'text' && (
         <button className="ctx-item" role="menuitem" onClick={() => { onCopy(); onClose() }}>
           {Icon.copy} Copy
         </button>
@@ -542,11 +589,11 @@ function ContextMenu({ menu, onClose, onReact, onReply, onCopy, onForward, onDel
   )
 }
 
-function Lightbox({ items, index, onClose, onNav }) {
+function Lightbox({ items, index, onClose, onNav }: { items: (ConvoMessage & { body: FileBody })[]; index: number; onClose: () => void; onNav: (delta: number) => void }) {
   const item = items[index]
 
   useEffect(() => {
-    const key = (e) => {
+    const key = (e: globalThis.KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
       if (e.key === 'ArrowLeft') onNav(-1)
       if (e.key === 'ArrowRight') onNav(1)
@@ -606,8 +653,13 @@ function Lightbox({ items, index, onClose, onNav }) {
   )
 }
 
-function LocationModal({ onSend, onClose }) {
-  const [pos, setPos] = useState(null)
+interface LatLng {
+  lat: number
+  lng: number
+}
+
+function LocationModal({ onSend, onClose }: { onSend: (pos: LatLng) => void; onClose: () => void }) {
+  const [pos, setPos] = useState<LatLng | null>(null)
   const [manual, setManual] = useState('')
   const [error, setError] = useState('')
 
@@ -656,7 +708,7 @@ function LocationModal({ onSend, onClose }) {
           </button>
         </div>
         {error && <p className="modal-error">{error}</p>}
-        <button className="primary" disabled={!pos} onClick={() => { onSend(pos); onClose() }}>
+        <button className="primary" disabled={!pos} onClick={() => { onSend(pos!); onClose() }}>
           Send this location
           <span className="btn-icon">{Icon.pin}</span>
         </button>
@@ -665,21 +717,30 @@ function LocationModal({ onSend, onClose }) {
   )
 }
 
-function Composer({ target, onSend, onTyping, onPickFiles }) {
+type ComposerMenu = 'attach' | 'location' | null
+
+interface ComposerProps {
+  target: ChatTarget
+  onSend: (env: OutgoingEnvelope) => void
+  onTyping: () => void
+  onPickFiles: (files: FileList | File[]) => void
+}
+
+function Composer({ target, onSend, onTyping, onPickFiles }: ComposerProps) {
   const [draft, setDraft] = useState('')
-  const [rec, setRec] = useState(null)
+  const [rec, setRec] = useState<(MediaRecorder & { cancelled?: boolean }) | null>(null)
   const [recElapsed, setRecElapsed] = useState(0)
   const [note, setNote] = useState('')
-  const [menu, setMenu] = useState(null)
+  const [menu, setMenu] = useState<ComposerMenu>(null)
   const [locModal, setLocModal] = useState(false)
-  const [mentionQuery, setMentionQuery] = useState(null) // null = dropdown closed
-  const [mentioned, setMentioned] = useState(new Map()) // id -> name, for this draft
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null) // null = dropdown closed
+  const [mentioned, setMentioned] = useState<Map<string, string>>(new Map()) // id -> name, for this draft
   // three static inputs with fixed accepts — mutating one input's accept right
   // before .click() is flaky in Safari, so each category gets its own element
-  const photosRef = useRef(null)
-  const audioRef = useRef(null)
-  const docsRef = useRef(null)
-  const inputRef = useRef(null)
+  const photosRef = useRef<HTMLInputElement>(null)
+  const audioRef = useRef<HTMLInputElement>(null)
+  const docsRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   const mentionStart = useRef(0)
 
   useEffect(() => {
@@ -704,12 +765,12 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
     return () => document.removeEventListener('click', close)
   }, [menu])
 
-  const flash = (text) => {
+  const flash = (text: string) => {
     setNote(text)
     setTimeout(() => setNote(''), 3000)
   }
 
-  const submit = (e) => {
+  const submit = (e: FormEvent) => {
     e.preventDefault()
     const text = draft.trim()
     if (!text) return
@@ -725,9 +786,9 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
 
   // @mentions: only relevant in groups. Detects an "@" that starts a word
   // (start of message or after whitespace) with no space typed since.
-  const onDraftChange = (e) => {
+  const onDraftChange = (e: ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value
-    const cursor = e.target.selectionStart
+    const cursor = e.target.selectionStart ?? value.length
     setDraft(value)
     onTyping()
     if (!target.isGroup) return
@@ -742,9 +803,9 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
     setMentionQuery(uptoCursor.slice(atIndex + 1))
   }
 
-  const pickMention = (member) => {
+  const pickMention = (member: GroupMember) => {
     const before = draft.slice(0, mentionStart.current)
-    const after = draft.slice(mentionStart.current + 1 + mentionQuery.length)
+    const after = draft.slice(mentionStart.current + 1 + (mentionQuery?.length ?? 0))
     const insertion = `@${member.name} `
     setDraft(before + insertion + after)
     setMentioned((prev) => new Map(prev).set(member.id, member.name))
@@ -763,7 +824,7 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
           .slice(0, 6)
       : []
 
-  const sendFiles = (files) => {
+  const sendFiles = (files: FileList | File[]) => {
     const ok = [...files].slice(0, 5).filter((f) => {
       if (f.size > MAX_FILE) {
         flash(`${f.name} is over 15 MB`)
@@ -775,14 +836,15 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
   }
 
   const startVoice = async () => {
-    let stream
+    let stream: MediaStream
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true })
     } catch {
-      return flash('Microphone unavailable')
+      flash('Microphone unavailable')
+      return
     }
-    const recorder = new MediaRecorder(new MediaStream(stream.getAudioTracks()))
-    const chunks = []
+    const recorder: MediaRecorder & { cancelled?: boolean } = new MediaRecorder(new MediaStream(stream.getAudioTracks()))
+    const chunks: Blob[] = []
     recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data)
     recorder.onstop = async () => {
       stream.getTracks().forEach((t) => t.stop())
@@ -796,21 +858,21 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
     setRec(recorder)
   }
 
-  const stopVoice = (cancelled) => {
+  const stopVoice = (cancelled: boolean) => {
     if (!rec) return
     rec.cancelled = cancelled
     rec.stop()
     setRec(null)
   }
 
-  const fileInput = (ref, accept) => (
+  const fileInput = (ref: RefObject<HTMLInputElement | null>, accept: string) => (
     <input
       ref={ref}
       type="file"
       accept={accept || undefined}
       multiple
       style={{ display: 'none' }}
-      onChange={(e) => { sendFiles(e.target.files); e.target.value = '' }}
+      onChange={(e) => { if (e.target.files) sendFiles(e.target.files); e.target.value = '' }}
     />
   )
 
@@ -884,7 +946,7 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
               role="menuitem"
               onClick={() => {
                 setMenu(null)
-                if (!navigator.geolocation) return flash('Location is not available here')
+                if (!navigator.geolocation) { flash('Location is not available here'); return }
                 navigator.geolocation.getCurrentPosition(
                   (p) => onSend({ t: 'loc', lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6) }),
                   () => flash('Could not get your location'),
@@ -908,7 +970,7 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
           ref={inputRef}
           value={draft}
           onChange={onDraftChange}
-          onKeyDown={(e) => { if (e.key === 'Escape') setMentionQuery(null) }}
+          onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Escape') setMentionQuery(null) }}
           placeholder={target.online || target.isGroup ? 'Write privately…' : `${target.name} is offline — they'll get it when back`}
           aria-label="Message"
           autoComplete="off"
@@ -947,31 +1009,64 @@ function Composer({ target, onSend, onTyping, onPickFiles }) {
   )
 }
 
+interface SwipeState {
+  x: number
+  y: number
+  dx: number
+  el: HTMLElement
+  m: ConvoMessage
+  live: boolean
+  armed: boolean
+  pid: number
+}
+
+interface ThreadProps {
+  target: ChatTarget
+  convo?: Convo
+  clientId: string
+  onBack: () => void
+  onSend: (env: OutgoingEnvelope) => void
+  onTyping: () => void
+  onStartCall: () => void
+  callBusy: boolean
+  onReact: (msgId: string, emoji: string | null) => void
+  onDeleteMe: (msgId: string) => void
+  onDeleteAll: (msgId: string) => void
+  onForward: (msg: ConvoMessage) => void
+  onLeaveGroup: () => void
+  onDeleteGroup: () => void
+  onAddMembers: () => void
+  onBlock: (id: string) => void
+  onUnblock?: (id: string) => void
+  onDeleteConversation?: (id: string) => void
+  socketRef?: RefObject<Socket | null>
+}
+
 // target: { id, name, online, isGroup, members?, owner?, mine? }
 export function Thread({
   target, convo, clientId, onBack, onSend, onTyping, onStartCall, callBusy,
   onReact, onDeleteMe, onDeleteAll, onForward, onLeaveGroup, onDeleteGroup, onAddMembers, onBlock, onUnblock,
   onDeleteConversation, socketRef,
-}) {
-  const scrollRef = useRef(null)
-  const [menu, setMenu] = useState(null)
+}: ThreadProps) {
+  const scrollRef = useRef<HTMLElement>(null)
+  const [menu, setMenu] = useState<MenuState | null>(null)
   const [headMenu, setHeadMenu] = useState(false)
-  const [lightbox, setLightbox] = useState(null)
+  const [lightbox, setLightbox] = useState<number | null>(null)
   const [dragOver, setDragOver] = useState(false)
-  const [pending, setPending] = useState([]) // files awaiting caption/edit before send
-  const [replyTo, setReplyTo] = useState(null) // { id, name, preview }
+  const [pending, setPending] = useState<File[]>([]) // files awaiting caption/edit before send
+  const [replyTo, setReplyTo] = useState<ReplyRef | null>(null)
   const [blockModal, setBlockModal] = useState(false)
   const [reportModal, setReportModal] = useState(false)
   const [deleteChatModal, setDeleteChatModal] = useState(false)
-  const swipe = useRef(null)
+  const swipe = useRef<SwipeState | null>(null)
   const dragDepth = useRef(0)
   const messages = convo?.messages ?? []
   const mediaList = messages.filter(isMedia)
 
-  const queueFiles = (files) =>
+  const queueFiles = (files: FileList | File[]) =>
     setPending((q) => [...q, ...[...files].filter((f) => f.size <= MAX_FILE).slice(0, 5)])
 
-  const onDrop = (e) => {
+  const onDrop = (e: React.DragEvent) => {
     e.preventDefault()
     dragDepth.current = 0
     setDragOver(false)
@@ -989,13 +1084,13 @@ export function Thread({
     return () => document.removeEventListener('click', close)
   }, [headMenu])
 
-  const openMenu = (e, m) => {
+  const openMenu = (e: MouseEvent, m: ConvoMessage) => {
     if (m.deleted || m.kind === 'call' || m.kind === 'sys' || m.kind === 'error') return
     e.preventDefault()
     setMenu({ msg: m, x: e.clientX, y: e.clientY })
   }
 
-  const startReply = (m) => {
+  const startReply = (m: ConvoMessage) => {
     if (m.deleted || m.kind === 'call' || m.kind === 'sys' || m.kind === 'error') return
     setReplyTo({
       id: m.id,
@@ -1005,12 +1100,12 @@ export function Thread({
   }
 
   // every outgoing envelope carries the pending reply reference
-  const sendWithReply = (env) => {
-    onSend(replyTo ? { ...env, reply: replyTo } : env)
+  const sendWithReply = (env: OutgoingEnvelope) => {
+    onSend(replyTo ? { ...env, reply: replyTo } as OutgoingEnvelope : env)
     setReplyTo(null)
   }
 
-  const jumpTo = (msgId) => {
+  const jumpTo = (msgId: string) => {
     const el = scrollRef.current?.querySelector(`[data-msg-id="${msgId}"]`)
     if (!el) return
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -1021,12 +1116,12 @@ export function Thread({
   // WhatsApp swipe/drag-right-to-reply — pointer events cover touch AND mouse.
   // The gesture only arms after 14px of horizontal intent, so clicks, text
   // selection, and vertical scrolling all behave normally.
-  const onSwipeStart = (e, m) => {
+  const onSwipeStart = (e: ReactPointerEvent, m: ConvoMessage) => {
     if (m.deleted || m.kind === 'call' || m.kind === 'sys' || m.kind === 'error') return
     if (e.pointerType === 'mouse' && e.button !== 0) return
-    swipe.current = { x: e.clientX, y: e.clientY, dx: 0, el: e.currentTarget, m, live: true, armed: false, pid: e.pointerId }
+    swipe.current = { x: e.clientX, y: e.clientY, dx: 0, el: e.currentTarget as HTMLElement, m, live: true, armed: false, pid: e.pointerId }
   }
-  const onSwipeMove = (e) => {
+  const onSwipeMove = (e: ReactPointerEvent) => {
     const s = swipe.current
     if (!s?.live) return
     const dx = e.clientX - s.x
@@ -1042,9 +1137,9 @@ export function Thread({
     const pull = Math.min(Math.max(dx, 0), 76)
     s.el.style.transition = 'none'
     s.el.style.transform = `translateX(${pull}px)`
-    const badge = s.el.querySelector('.swipe-badge')
+    const badge = s.el.querySelector('.swipe-badge') as HTMLElement | null
     if (badge) {
-      badge.style.opacity = Math.min(pull / 60, 1)
+      badge.style.opacity = String(Math.min(pull / 60, 1))
       badge.style.transform = `translateY(-50%) scale(${0.6 + Math.min(pull / 60, 1) * 0.4})`
     }
   }
@@ -1054,14 +1149,14 @@ export function Thread({
     document.body.style.userSelect = ''
     s.el.style.transition = ''
     s.el.style.transform = ''
-    const badge = s.el.querySelector('.swipe-badge')
-    if (badge) { badge.style.opacity = 0; badge.style.transform = '' }
+    const badge = s.el.querySelector('.swipe-badge') as HTMLElement | null
+    if (badge) { badge.style.opacity = '0'; badge.style.transform = '' }
     if (s.live && s.armed && s.dx > 56) startReply(s.m)
     swipe.current = null
   }
 
   const subtitle = target.isGroup
-    ? target.members.map((m) => (m.id === clientId ? 'you' : m.name)).join(', ')
+    ? (target.members ?? []).map((m) => (m.id === clientId ? 'you' : m.name)).join(', ')
     : target.online
       ? convo?.typing
         ? 'typing…'
@@ -1184,21 +1279,24 @@ export function Thread({
         )}
         {messages.map((m, i) => {
           if (m.kind === 'sys') {
-            return <div key={m.id} className="sys-line">{m.body.text}</div>
+            return <div key={m.id} className="sys-line">{'text' in m.body ? m.body.text : ''}</div>
           }
           if (m.kind === 'call') {
+            const callBody = m.body as CallLogBody
             return (
-              <div key={m.id} className={`call-log ${m.body.kind === 'missed' ? 'missed' : ''}`}>
-                {m.body.kind === 'missed' || m.body.kind === 'declined' ? Icon.videoOff : Icon.video}
-                {callLogText(m.body, target.name)}
+              <div key={m.id} className={`call-log ${callBody.kind === 'missed' ? 'missed' : ''}`}>
+                {callBody.kind === 'missed' || callBody.kind === 'declined' ? Icon.videoOff : Icon.video}
+                {callLogText(callBody, target.name)}
                 <time>{timeFmt.format(m.ts)}</time>
               </div>
             )
           }
           const prev = messages[i - 1]
-          const grouped = prev && prev.kind === m.kind && prev.from === m.from && m.ts - prev.ts < 120000
-          const rich = m.body.t !== 'text' && !m.deleted
+          const grouped = !!(prev && prev.kind === m.kind && prev.from === m.from && m.ts - prev.ts < 120000)
+          const rich = (!('t' in m.body) || m.body.t !== 'text') && !m.deleted
           const reactions = Object.values(m.reactions ?? {})
+          const reply = 'reply' in m.body ? m.body.reply : undefined
+          const fwd = 'fwd' in m.body ? m.body.fwd : undefined
           return (
             <div
               key={m.id}
@@ -1211,23 +1309,23 @@ export function Thread({
               onPointerCancel={onSwipeEnd}
             >
               <span className="swipe-badge" aria-hidden="true">{Icon.reply}</span>
-              <div className={`bubble ${rich ? 'rich' : ''} ${m.body.reply && !m.deleted ? 'has-quote' : ''}`}>
-                {m.body.reply && !m.deleted && (
-                  <button type="button" className="quote" onClick={() => jumpTo(m.body.reply.id)}>
-                    <span className="quote-name">{m.body.reply.name}</span>
-                    <span className="quote-text">{m.body.reply.preview}</span>
+              <div className={`bubble ${rich ? 'rich' : ''} ${reply && !m.deleted ? 'has-quote' : ''}`}>
+                {reply && !m.deleted && (
+                  <button type="button" className="quote" onClick={() => jumpTo(reply.id)}>
+                    <span className="quote-name">{reply.name}</span>
+                    <span className="quote-text">{reply.preview}</span>
                   </button>
                 )}
                 {target.isGroup && m.kind === 'peer' && !grouped && (
                   <span className="sender-name">{m.name}</span>
                 )}
-                {m.body.fwd && !m.deleted && <span className="fwd-tag">{Icon.forward} forwarded</span>}
+                {fwd && !m.deleted && <span className="fwd-tag">{Icon.forward} forwarded</span>}
                 {m.deleted ? (
                   <em className="decrypt-error">This message was deleted</em>
                 ) : m.kind === 'error' ? (
-                  <em className="decrypt-error">{m.body.text}</em>
+                  <em className="decrypt-error">{'text' in m.body ? m.body.text : ''}</em>
                 ) : (
-                  <MessageBody
+                  <MessageBodyView
                     body={m.body}
                     onOpenMedia={() => setLightbox(mediaList.findIndex((x) => x.id === m.id))}
                   />
@@ -1304,7 +1402,7 @@ export function Thread({
           onClose={() => setMenu(null)}
           onReact={(emoji) => onReact(menu.msg.id, emoji)}
           onReply={() => startReply(menu.msg)}
-          onCopy={() => navigator.clipboard?.writeText(menu.msg.body.text ?? '')}
+          onCopy={() => navigator.clipboard?.writeText('text' in menu.msg.body ? menu.msg.body.text ?? '' : '')}
           onForward={() => onForward(menu.msg)}
           onDeleteMe={() => onDeleteMe(menu.msg.id)}
           onDeleteAll={() => onDeleteAll(menu.msg.id)}
@@ -1315,7 +1413,7 @@ export function Thread({
           items={mediaList}
           index={lightbox}
           onClose={() => setLightbox(null)}
-          onNav={(delta) => setLightbox((i) => Math.max(0, Math.min(mediaList.length - 1, i + delta)))}
+          onNav={(delta) => setLightbox((i) => Math.max(0, Math.min(mediaList.length - 1, (i ?? 0) + delta)))}
         />
       )}
       {blockModal && (

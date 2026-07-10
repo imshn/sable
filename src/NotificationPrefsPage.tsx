@@ -1,7 +1,25 @@
-import React, { useState, useEffect } from 'react'
-import { Icon } from './icons.jsx'
+import { useState, useEffect, type ReactNode } from 'react'
+import type { Socket } from 'socket.io-client'
+import { Icon } from './icons.tsx'
+import type { NotificationPrefs } from './types.ts'
 
-function Toggle({ label, description, value, onChange }) {
+interface Prefs {
+  messages: boolean
+  calls: boolean
+  contact_requests: boolean
+  mentions: boolean
+  group_activity: boolean
+  announcements: boolean
+}
+
+interface ToggleProps {
+  label: string
+  description?: ReactNode
+  value: boolean
+  onChange: (value: boolean) => void
+}
+
+function Toggle({ label, description, value, onChange }: ToggleProps) {
   return (
     <div className="notif-row">
       <div className="notif-row-label">
@@ -20,11 +38,18 @@ function Toggle({ label, description, value, onChange }) {
   )
 }
 
-export function NotificationPrefsPage({ socket, pushEnabled, onEnablePush, onDisablePush }) {
-  const [prefs, setPrefs] = useState(null)
+interface NotificationPrefsPageProps {
+  socket: Socket | null | undefined
+  pushEnabled: boolean
+  onEnablePush?: () => Promise<boolean>
+  onDisablePush?: () => Promise<void>
+}
+
+export function NotificationPrefsPage({ socket, pushEnabled, onEnablePush, onDisablePush }: NotificationPrefsPageProps) {
+  const [prefs, setPrefs] = useState<Prefs | null>(null)
   const [saved, setSaved] = useState(false)
   const [pushBusy, setPushBusy] = useState(false)
-  const [pushMsg, setPushMsg] = useState(null)
+  const [pushMsg, setPushMsg] = useState<string | null>(null)
   const pushUnsupported = typeof window !== 'undefined' && !('serviceWorker' in navigator && 'PushManager' in window)
   const pushBlocked = typeof Notification !== 'undefined' && Notification.permission === 'denied'
 
@@ -42,16 +67,17 @@ export function NotificationPrefsPage({ socket, pushEnabled, onEnablePush, onDis
 
   useEffect(() => {
     if (!socket) return
-    const handle = (p) => setPrefs({
+    const handle = (p: NotificationPrefs) => setPrefs({
       messages: !!p.messages, calls: !!p.calls, contact_requests: !!p.contact_requests, mentions: !!p.mentions,
       group_activity: p.group_activity !== 0, announcements: p.announcements !== 0,
     })
     socket.on('notification-prefs', handle)
     socket.emit('get-notification-prefs')
-    return () => socket.off('notification-prefs', handle)
+    return () => { socket.off('notification-prefs', handle) }
   }, [socket])
 
-  const update = (key, val) => {
+  const update = (key: keyof Prefs, val: boolean) => {
+    if (!prefs) return
     const next = { ...prefs, [key]: val }
     setPrefs(next)
     socket?.emit('save-notification-prefs', next)

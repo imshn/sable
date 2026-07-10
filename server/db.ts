@@ -1,14 +1,19 @@
 // Turso (libSQL) persistence. Everything stored is either public-by-design
 // (names, public keys, group rosters) or ciphertext the server cannot read.
 // Without TURSO_DATABASE_URL the relay runs memory-only, exactly as before.
-import { createClient } from '@libsql/client'
+import { createClient, type Client } from '@libsql/client'
+import type {
+  UserRow, ContactRow, InviteRow, GroupRow, MessageRow, UndeliveredRow,
+  DeletedConversationRow, PrivacySettingsRow, NotificationPrefsRow, SessionRow,
+  LoginHistoryRow, PasskeyCredentialRow, PushSubscriptionRow,
+} from './types.js'
 
 const url = process.env.TURSO_DATABASE_URL
 const authToken = process.env.TURSO_AUTH_TOKEN
 
-export const db = url ? createClient({ url, authToken }) : null
+export const db: Client | null = url ? createClient({ url, authToken }) : null
 
-export async function migrate() {
+export async function migrate(): Promise<void> {
   if (!db) {
     console.log('no TURSO_DATABASE_URL — running memory-only (no history, no offline delivery)')
     return
@@ -136,7 +141,7 @@ export async function migrate() {
   ], 'write')
 
   // Safely add columns using a helper that swallows "column already exists" errors
-  const addCol = async (sql) => { try { await db.execute(sql) } catch (e) { /* ignores if exists */ } }
+  const addCol = async (sql: string) => { try { await db!.execute(sql) } catch { /* ignores if exists */ } }
   await addCol("ALTER TABLE users ADD COLUMN username TEXT")
   await addCol("ALTER TABLE users ADD COLUMN avatar TEXT")
   await addCol("ALTER TABLE users ADD COLUMN bio TEXT")
@@ -155,11 +160,11 @@ export async function migrate() {
 }
 
 // fire-and-forget writes — a slow or failing DB must never break live relaying
-const safe = (p) => p.catch((e) => console.error('db error', e.message))
+const safe = (p: Promise<unknown>) => p.catch((e) => console.error('db error', (e as Error).message))
 
 export const store = {
   // ---- Users ----
-  upsertUser: (id, name, pubkey, username = null) => {
+  upsertUser: (id: string, name: string, pubkey: string, username: string | null = null) => {
     if (!db) return
     if (username) {
       return safe(db.execute({
@@ -176,14 +181,14 @@ export const store = {
     }
   },
 
-  checkUsernameAvailable: async (username, currentUserId) => {
+  checkUsernameAvailable: async (username: string, currentUserId: string): Promise<boolean> => {
     if (!db) return true
     const r = await db.execute({ sql: `SELECT id FROM users WHERE username = ? AND deleted = 0`, args: [username] })
     if (r.rows.length === 0) return true
     return r.rows[0].id === currentUserId
   },
 
-  updateProfile: async (id, { name, username, bio, avatar }) => {
+  updateProfile: async (id: string, { name, username, bio, avatar }: { name: string; username: string; bio: string; avatar: string }): Promise<boolean> => {
     if (!db) return false
     try {
       const r = await db.execute({
@@ -192,31 +197,31 @@ export const store = {
       })
       return r.rowsAffected > 0
     } catch (e) {
-      console.error('db update profile error:', e.message)
+      console.error('db update profile error:', (e as Error).message)
       return false
     }
   },
 
-  getUser: async (id) => {
+  getUser: async (id: string): Promise<UserRow | null> => {
     if (!db) return null
     const r = await db.execute({ sql: `SELECT id, name, username, bio, avatar, pubkey, created_at, updated_at, last_seen FROM users WHERE id=? AND deleted=0`, args: [id] })
-    return r.rows[0] || null
+    return (r.rows[0] as unknown as UserRow) || null
   },
 
-  touchUser: (id) =>
+  touchUser: (id: string) =>
     db && safe(db.execute({ sql: `UPDATE users SET last_seen=? WHERE id=?`, args: [Date.now(), id] })),
 
-  allUsers: async () => {
+  allUsers: async (): Promise<UserRow[]> => {
     if (!db) return []
     const r = await db.execute(`SELECT id, name, username, avatar, pubkey, last_seen FROM users WHERE deleted=0 ORDER BY last_seen DESC LIMIT 200`)
-    return r.rows
+    return r.rows as unknown as UserRow[]
   },
 
-  searchUsers: async (query, currentUserId, limit = 50) => {
+  searchUsers: async (query: string, currentUserId: string, limit = 50): Promise<UserRow[]> => {
     if (!db || !query) return []
     const like = `%${query}%`
     const r = await db.execute({
-      sql: `SELECT id, name, username, avatar FROM users 
+      sql: `SELECT id, name, username, avatar FROM users
             WHERE (username LIKE ? OR name LIKE ?)
             AND id != ?
             AND deleted = 0
@@ -228,11 +233,11 @@ export const store = {
             LIMIT ?`,
       args: [like, like, currentUserId, currentUserId, currentUserId, limit]
     })
-    return r.rows
+    return r.rows as unknown as UserRow[]
   },
 
   // Soft-delete account: anonymize user record, keep message ciphertext for other participants
-  deleteAccount: async (userId) => {
+  deleteAccount: async (userId: string): Promise<void> => {
     if (!db) return
     const anon = `deleted_${userId.slice(0, 8)}`
     await db.execute({
@@ -249,14 +254,14 @@ export const store = {
   },
 
   // ---- Contacts ----
-  upsertContact: (requesterId, recipientId, status) =>
+  upsertContact: (requesterId: string, recipientId: string, status: string) =>
     db && safe(db.execute({
       sql: `INSERT INTO contacts (requester_id, recipient_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(requester_id, recipient_id) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at`,
       args: [requesterId, recipientId, status, Date.now(), Date.now()]
     })),
 
-  getContacts: async (userId) => {
+  getContacts: async (userId: string): Promise<ContactRow[]> => {
     if (!db) return []
     const r = await db.execute({
       sql: `SELECT c.*,
@@ -268,23 +273,23 @@ export const store = {
             WHERE (c.requester_id = ? OR c.recipient_id = ?)`,
       args: [userId, userId]
     })
-    return r.rows
+    return r.rows as unknown as ContactRow[]
   },
 
-  deleteContact: (requesterId, recipientId) =>
+  deleteContact: (requesterId: string, recipientId: string) =>
     db && safe(db.execute({
       sql: `DELETE FROM contacts WHERE (requester_id = ? AND recipient_id = ?) OR (requester_id = ? AND recipient_id = ?)`,
       args: [requesterId, recipientId, recipientId, requesterId]
     })),
 
   // ---- Invitations ----
-  createInvite: (id, code, creatorId, expiresAt) =>
+  createInvite: (id: string, code: string, creatorId: string, expiresAt: number | null) =>
     db && safe(db.execute({
       sql: `INSERT INTO invitations (id, code, creator_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
       args: [id, code, creatorId, Date.now(), expiresAt]
     })),
 
-  getInvite: async (code) => {
+  getInvite: async (code: string): Promise<InviteRow | null> => {
     if (!db) return null
     const r = await db.execute({
       sql: `SELECT i.*, u.name as creator_name, u.username as creator_username, u.avatar as creator_avatar
@@ -293,78 +298,80 @@ export const store = {
             WHERE i.code = ? AND u.deleted = 0`,
       args: [code]
     })
-    return r.rows[0]
+    return (r.rows[0] as unknown as InviteRow) ?? null
   },
 
   // ---- Groups ----
-  saveGroup: (id, name, owner, memberIds) =>
+  saveGroup: (id: string, name: string, owner: string, memberIds: string[]) =>
     db && safe((async () => {
-      await db.execute({ sql: `INSERT OR REPLACE INTO groups (id, name, owner) VALUES (?, ?, ?)`, args: [id, name, owner] })
-      await db.execute({ sql: `DELETE FROM group_members WHERE group_id=?`, args: [id] })
+      await db!.execute({ sql: `INSERT OR REPLACE INTO groups (id, name, owner) VALUES (?, ?, ?)`, args: [id, name, owner] })
+      await db!.execute({ sql: `DELETE FROM group_members WHERE group_id=?`, args: [id] })
       for (const m of memberIds) {
-        await db.execute({ sql: `INSERT OR IGNORE INTO group_members (group_id, member_id) VALUES (?, ?)`, args: [id, m] })
+        await db!.execute({ sql: `INSERT OR IGNORE INTO group_members (group_id, member_id) VALUES (?, ?)`, args: [id, m] })
       }
     })()),
 
-  deleteGroup: (id) =>
+  deleteGroup: (id: string) =>
     db && safe(db.batch([
       { sql: `DELETE FROM groups WHERE id=?`, args: [id] },
       { sql: `DELETE FROM group_members WHERE group_id=?`, args: [id] },
     ], 'write')),
 
-  loadGroups: async () => {
+  loadGroups: async (): Promise<GroupRow[]> => {
     if (!db) return []
     const gs = await db.execute(`SELECT id, name, owner FROM groups`)
     const ms = await db.execute(`SELECT group_id, member_id FROM group_members`)
     return gs.rows.map((g) => ({
-      ...g,
-      members: ms.rows.filter((m) => m.group_id === g.id).map((m) => m.member_id),
+      id: g.id as string,
+      name: g.name as string,
+      owner: g.owner as string,
+      members: ms.rows.filter((m) => m.group_id === g.id).map((m) => m.member_id as string),
     }))
   },
 
   // ---- Messages ----
-  saveMessage: (id, recipient, sender, senderPub, groupId, payload, ts, delivered) =>
+  saveMessage: (id: string, recipient: string, sender: string, senderPub: string, groupId: string | null, payload: string, ts: number, delivered: boolean) =>
     db && safe(db.execute({
       sql: `INSERT OR IGNORE INTO messages (id, recipient, sender, sender_pub, group_id, payload, ts, delivered)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [id, recipient, sender, senderPub, groupId, payload, ts, delivered ? 1 : 0],
     })),
 
-  markDelivered: (id, recipient) =>
+  markDelivered: (id: string, recipient: string) =>
     db && safe(db.execute({ sql: `UPDATE messages SET delivered=1 WHERE id=? AND recipient=?`, args: [id, recipient] })),
 
-  backlog: async (recipient, limit = 500) => {
+  backlog: async (recipient: string, limit = 500): Promise<MessageRow[]> => {
     if (!db) return []
     const r = await db.execute({
       sql: `SELECT id, sender, sender_pub, group_id, payload, ts, delivered FROM messages
             WHERE recipient=? ORDER BY ts DESC LIMIT ?`,
       args: [recipient, limit],
     })
-    return r.rows.reverse()
+    return (r.rows as unknown as MessageRow[]).reverse()
   },
 
-  undeliveredSenders: async (recipient) => {
+  undeliveredSenders: async (recipient: string): Promise<UndeliveredRow[]> => {
     if (!db) return []
     const r = await db.execute({
       sql: `SELECT DISTINCT id, sender FROM messages WHERE recipient=? AND delivered=0`,
       args: [recipient],
     })
-    return r.rows
+    return r.rows as unknown as UndeliveredRow[]
   },
 
   // peerId -> deletedAt, so a reconnecting client can re-hide history it
   // already cleared (the server can't filter this itself: a self-sent
   // message's "which conversation" tag lives inside the ciphertext, not a
   // DB column, so the client re-applies the cutoff after decrypting).
-  getDeletedConversations: async (userId) => {
+  getDeletedConversations: async (userId: string): Promise<DeletedConversationRow[]> => {
     if (!db) return []
     const r = await db.execute({ sql: `SELECT peer_id, deleted_at FROM deleted_conversations WHERE user_id=?`, args: [userId] })
-    return r.rows
+    return r.rows as unknown as DeletedConversationRow[]
   },
 
   // Soft-delete: mark that a user has deleted their side of a conversation.
   // Messages are only purged from DB when BOTH sides have deleted.
-  deleteConversation: async (userId, peerId) => {
+  deleteConversation: async (userId: string, peerId: string): Promise<void> => {
     if (!db) return
     await db.execute({
       sql: `INSERT INTO deleted_conversations (user_id, peer_id, deleted_at) VALUES (?, ?, ?)
@@ -387,10 +394,18 @@ export const store = {
   },
 
   // ---- Privacy Settings ----
-  getPrivacySettings: async (userId) => {
-    if (!db) return null
+  getPrivacySettings: async (userId: string): Promise<PrivacySettingsRow> => {
+    if (!db) return {
+      user_id: userId,
+      message_privacy: 'everyone',
+      call_privacy: 'everyone',
+      last_seen_privacy: 'everyone',
+      online_privacy: 'everyone',
+      avatar_privacy: 'everyone',
+      bio_privacy: 'everyone',
+    }
     const r = await db.execute({ sql: `SELECT * FROM privacy_settings WHERE user_id=?`, args: [userId] })
-    return r.rows[0] || {
+    return (r.rows[0] as unknown as PrivacySettingsRow) || {
       user_id: userId,
       message_privacy: 'everyone',
       call_privacy: 'everyone',
@@ -401,7 +416,7 @@ export const store = {
     }
   },
 
-  savePrivacySettings: (userId, { message_privacy, call_privacy, last_seen_privacy, online_privacy, avatar_privacy, bio_privacy }) =>
+  savePrivacySettings: (userId: string, { message_privacy, call_privacy, last_seen_privacy, online_privacy, avatar_privacy, bio_privacy }: Omit<PrivacySettingsRow, 'user_id'>) =>
     db && safe(db.execute({
       sql: `INSERT INTO privacy_settings (user_id, message_privacy, call_privacy, last_seen_privacy, online_privacy, avatar_privacy, bio_privacy)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -416,20 +431,21 @@ export const store = {
     })),
 
   // ---- Reports ----
-  createReport: (id, reporterId, reportedId, category, details) =>
+  createReport: (id: string, reporterId: string, reportedId: string, category: string, details: string | null) =>
     db && safe(db.execute({
       sql: `INSERT INTO user_reports (id, reporter_id, reported_id, category, details, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
       args: [id, reporterId, reportedId, category, details || null, Date.now()]
     })),
 
   // ---- Notification Preferences ----
-  getNotificationPrefs: async (userId) => {
-    if (!db) return null
+  getNotificationPrefs: async (userId: string): Promise<NotificationPrefsRow> => {
+    const fallback: NotificationPrefsRow = { user_id: userId, messages: 1, calls: 1, contact_requests: 1, mentions: 1, group_activity: 1, announcements: 1 }
+    if (!db) return fallback
     const r = await db.execute({ sql: `SELECT * FROM notification_preferences WHERE user_id=?`, args: [userId] })
-    return r.rows[0] || { user_id: userId, messages: 1, calls: 1, contact_requests: 1, mentions: 1, group_activity: 1, announcements: 1 }
+    return (r.rows[0] as unknown as NotificationPrefsRow) || fallback
   },
 
-  saveNotificationPrefs: (userId, { messages, calls, contact_requests, mentions, group_activity, announcements }) =>
+  saveNotificationPrefs: (userId: string, { messages, calls, contact_requests, mentions, group_activity, announcements }: { messages: boolean; calls: boolean; contact_requests: boolean; mentions: boolean; group_activity: boolean; announcements: boolean }) =>
     db && safe(db.execute({
       sql: `INSERT INTO notification_preferences (user_id, messages, calls, contact_requests, mentions, group_activity, announcements)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -441,99 +457,99 @@ export const store = {
     })),
 
   // ---- Sessions ----
-  createSession: (id, userId, socketId, ip, userAgent, deviceHint) =>
+  createSession: (id: string, userId: string, socketId: string, ip: string | null, userAgent: string | null, deviceHint: string | null) =>
     db && safe(db.execute({
       sql: `INSERT INTO user_sessions (id, user_id, socket_id, ip, user_agent, device_hint, logged_in_at, last_active)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [id, userId, socketId, ip || null, userAgent || null, deviceHint || null, Date.now(), Date.now()]
     })),
 
-  touchSession: (sessionId) =>
+  touchSession: (sessionId: string) =>
     db && safe(db.execute({ sql: `UPDATE user_sessions SET last_active=? WHERE id=?`, args: [Date.now(), sessionId] })),
 
-  getSessions: async (userId) => {
+  getSessions: async (userId: string): Promise<SessionRow[]> => {
     if (!db) return []
     const r = await db.execute({
       sql: `SELECT id, socket_id, ip, user_agent, device_hint, logged_in_at, last_active FROM user_sessions
             WHERE user_id=? AND revoked=0 ORDER BY last_active DESC LIMIT 20`,
       args: [userId]
     })
-    return r.rows
+    return r.rows as unknown as SessionRow[]
   },
 
   // Every login ever recorded (active or since ended), newest first — the
   // same user_sessions rows getSessions filters to revoked=0, just unfiltered.
-  getLoginHistory: async (userId, limit = 20) => {
+  getLoginHistory: async (userId: string, limit = 20): Promise<LoginHistoryRow[]> => {
     if (!db) return []
     const r = await db.execute({
       sql: `SELECT id, ip, device_hint, logged_in_at, last_active, revoked FROM user_sessions
             WHERE user_id=? ORDER BY logged_in_at DESC LIMIT ?`,
       args: [userId, limit]
     })
-    return r.rows
+    return r.rows as unknown as LoginHistoryRow[]
   },
 
-  revokeSession: (sessionId, userId) =>
+  revokeSession: (sessionId: string, userId: string) =>
     db && safe(db.execute({
       sql: `UPDATE user_sessions SET revoked=1 WHERE id=? AND user_id=?`,
       args: [sessionId, userId]
     })),
 
-  revokeAllSessionsExcept: (userId, exceptSessionId) =>
+  revokeAllSessionsExcept: (userId: string, exceptSessionId: string) =>
     db && safe(db.execute({
       sql: `UPDATE user_sessions SET revoked=1 WHERE user_id=? AND id != ?`,
       args: [userId, exceptSessionId]
     })),
 
   // ---- Passkeys ----
-  savePasskey: (id, userId, credentialId, publicKey, counter, deviceType, backedUp, transports) =>
+  savePasskey: (id: string, userId: string, credentialId: string, publicKey: string, counter: number, deviceType: string | undefined, backedUp: boolean, transports: string[] | undefined) =>
     db && safe(db.execute({
       sql: `INSERT INTO passkey_credentials (id, user_id, credential_id, public_key, counter, device_type, backed_up, transports, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [id, userId, credentialId, publicKey, counter, deviceType || null, backedUp ? 1 : 0, transports ? JSON.stringify(transports) : null, Date.now()]
     })),
 
-  getPasskeysByUser: async (userId) => {
+  getPasskeysByUser: async (userId: string): Promise<PasskeyCredentialRow[]> => {
     if (!db) return []
     const r = await db.execute({
       sql: `SELECT * FROM passkey_credentials WHERE user_id=? ORDER BY created_at DESC`,
       args: [userId]
     })
-    return r.rows
+    return r.rows as unknown as PasskeyCredentialRow[]
   },
 
-  getPasskeyByCredentialId: async (credentialId) => {
+  getPasskeyByCredentialId: async (credentialId: string): Promise<PasskeyCredentialRow | null> => {
     if (!db) return null
     const r = await db.execute({ sql: `SELECT * FROM passkey_credentials WHERE credential_id=?`, args: [credentialId] })
-    return r.rows[0] || null
+    return (r.rows[0] as unknown as PasskeyCredentialRow) || null
   },
 
-  updatePasskeyCounter: (credentialId, counter) =>
+  updatePasskeyCounter: (credentialId: string, counter: number) =>
     db && safe(db.execute({
       sql: `UPDATE passkey_credentials SET counter=?, last_used=? WHERE credential_id=?`,
       args: [counter, Date.now(), credentialId]
     })),
 
-  deletePasskey: (credentialId, userId) =>
+  deletePasskey: (credentialId: string, userId: string) =>
     db && safe(db.execute({
       sql: `DELETE FROM passkey_credentials WHERE credential_id=? AND user_id=?`,
       args: [credentialId, userId]
     })),
 
   // ---- Push subscriptions ----
-  savePushSubscription: (id, userId, endpoint, p256dh, auth) =>
+  savePushSubscription: (id: string, userId: string, endpoint: string, p256dh: string, auth: string) =>
     db && safe(db.execute({
       sql: `INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id, p256dh=excluded.p256dh, auth=excluded.auth`,
       args: [id, userId, endpoint, p256dh, auth, Date.now()]
     })),
 
-  getPushSubscriptions: async (userId) => {
+  getPushSubscriptions: async (userId: string): Promise<PushSubscriptionRow[]> => {
     if (!db) return []
     const r = await db.execute({ sql: `SELECT * FROM push_subscriptions WHERE user_id=?`, args: [userId] })
-    return r.rows
+    return r.rows as unknown as PushSubscriptionRow[]
   },
 
-  deletePushSubscription: (endpoint) =>
+  deletePushSubscription: (endpoint: string) =>
     db && safe(db.execute({ sql: `DELETE FROM push_subscriptions WHERE endpoint=?`, args: [endpoint] })),
 }

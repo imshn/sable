@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { io } from 'socket.io-client'
+import { io, type Socket } from 'socket.io-client'
 import {
   loadKeyPair,
   exportPublicKey,
@@ -8,65 +8,100 @@ import {
   decrypt,
   fingerprint,
   b64decode,
-} from './crypto.js'
-import { currentPushSubscription, subscribeToPush, unsubscribeFromPush } from './push.js'
+} from './crypto.ts'
+import { currentPushSubscription, subscribeToPush, unsubscribeFromPush } from './push.ts'
+import type {
+  Contact, Group, Convo, ConvoMessage, MessageBody, OutgoingEnvelope,
+  PasskeyActionResult, Passkey, Announcement, MyProfile, EncryptedPayload,
+} from './types.ts'
+
+declare global {
+  interface Window { __sableSocket?: Socket }
+}
 
 // Passwordless identity: your name IS your identity. Entering the same name
 // on any device always resolves to the same user — duplicates are impossible
 // by construction. Only the newest session for a name stays connected.
-export function getClientId(name) {
+export function getClientId(name: string): string {
   return `n-${name.trim().toLowerCase().replace(/\s+/g, '-')}`
 }
 
-const emptyConvo = () => ({ messages: [], unread: 0, typing: null, lastTs: 0 })
+const emptyConvo = (): Convo => ({ messages: [], unread: 0, typing: null, lastTs: 0 })
 
 // Content envelopes (encrypted as JSON): text / file / loc (+fwd flag)
 // Control envelopes: { t: 'react', msgId, emoji|null } and { t: 'delete', msgId }
 // Self-copies carry _to so restored sent messages land in the right thread.
 // Local-only kinds: 'call' (call logs) and 'sys' (group notices)
-const toBody = (env) => {
-  if (env.t === 'file') {
-    const url = URL.createObjectURL(new Blob([b64decode(env.data)], { type: env.mime }))
-    return { ...env, data: undefined, url }
+const toBody = (env: OutgoingEnvelope): MessageBody => {
+  if ('t' in env && env.t === 'file') {
+    const url = URL.createObjectURL(new Blob([b64decode(env.data!) as BlobPart], { type: env.mime }))
+    return { ...env, data: undefined, url } as MessageBody & { url: string }
   }
-  return env
+  return env as MessageBody
 }
 
-export function useChat(name, username) {
-  const [contacts, setContacts] = useState([]) // [{ id, name, username, avatar, online, lastSeen, status, isRequester }]
-  const [groups, setGroups] = useState([])
-  const [convos, setConvos] = useState({})
+interface ContactRow {
+  requester_id: string
+  recipient_id: string
+  recipient_name: string
+  requester_name: string
+  recipient_username: string
+  requester_username: string
+  recipient_avatar?: string | null
+  requester_avatar?: string | null
+  recipient_pubkey: string
+  requester_pubkey: string
+  status: Contact['status']
+  recipient_last_seen?: number | null
+  requester_last_seen?: number | null
+  online?: boolean
+}
+
+interface BacklogRow {
+  id: string
+  from: string
+  senderPub: string
+  groupId?: string
+  payload: EncryptedPayload
+  ts: number
+  fromName?: string
+}
+
+export function useChat(name: string, username: string) {
+  const [contacts, setContacts] = useState<Contact[]>([])
+  const [groups, setGroups] = useState<Group[]>([])
+  const [convos, setConvos] = useState<Record<string, Convo>>({})
   const [safetyCode, setSafetyCode] = useState('')
   const [connected, setConnected] = useState(false)
   const [sessionReplaced, setSessionReplaced] = useState(false)
-  const [authError, setAuthError] = useState(null)
-  const [myProfile, setMyProfile] = useState(null)
+  const [authError, setAuthError] = useState<string | null>(null)
+  const [myProfile, setMyProfile] = useState<MyProfile | null>(null)
   const [passkeyRequired, setPasskeyRequired] = useState(false)
-  const [passkeyError, setPasskeyError] = useState(null)
-  const [passkeys, setPasskeys] = useState(null)
+  const [passkeyError, setPasskeyError] = useState<string | null>(null)
+  const [passkeys, setPasskeys] = useState<Passkey[] | null>(null)
   const [pushEnabled, setPushEnabled] = useState(false)
-  const [announcement, setAnnouncement] = useState(null)
+  const [announcement, setAnnouncement] = useState<Announcement | null>(null)
 
-  const socketRef = useRef(null)
-  const keyCache = useRef(new Map()) // JSON(jwk) -> Promise<CryptoKey>
-  const peerKeyRef = useRef(new Map()) // peerId -> Promise<CryptoKey> (their latest key)
-  const selfKeyRef = useRef(null) // Promise<CryptoKey> for own history copies
-  const typingTimers = useRef(new Map())
-  const pubKeyRef = useRef(null) // this device's exported public key, for the passkey retry
-  const deletedAtRef = useRef(new Map()) // peerId -> ts; backlog rows at/before this are hidden
+  const socketRef = useRef<Socket | null>(null)
+  const keyCache = useRef(new Map<string, Promise<CryptoKey>>())
+  const peerKeyRef = useRef(new Map<string, Promise<CryptoKey>>())
+  const selfKeyRef = useRef<Promise<CryptoKey> | null>(null)
+  const typingTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const pubKeyRef = useRef<JsonWebKey | null>(null)
+  const deletedAtRef = useRef(new Map<string, number>()) // peerId -> ts; backlog rows at/before this are hidden
   // Use username as the primary identity key if available, otherwise name
   const clientId = getClientId(username || name)
 
-  const patchConvo = (key, fn) =>
+  const patchConvo = (key: string, fn: (c: Convo) => Convo) =>
     setConvos((c) => ({ ...c, [key]: fn(c[key] ?? emptyConvo()) }))
 
-  const updateMessage = (key, msgId, fn) =>
+  const updateMessage = (key: string, msgId: string, fn: (m: ConvoMessage) => ConvoMessage) =>
     patchConvo(key, (c) => ({
       ...c,
       messages: c.messages.map((m) => (m.id === msgId ? fn(m) : m)),
     }))
 
-  const addEntry = (key, entry, bumpUnread) =>
+  const addEntry = (key: string, entry: ConvoMessage, bumpUnread: boolean) =>
     patchConvo(key, (c) => ({
       ...c,
       messages: [...c.messages, entry],
@@ -75,7 +110,7 @@ export function useChat(name, username) {
       lastTs: entry.ts,
     }))
 
-  const setTypingFor = (key, typerName) => {
+  const setTypingFor = (key: string, typerName: string) => {
     patchConvo(key, (c) => ({ ...c, typing: typerName }))
     clearTimeout(typingTimers.current.get(key))
     typingTimers.current.set(
@@ -84,8 +119,8 @@ export function useChat(name, username) {
     )
   }
 
-  const applyControl = (key, reactor, env) => {
-    if (env?.t === 'react') {
+  const applyControl = (key: string, reactor: string, env: OutgoingEnvelope): boolean => {
+    if ('t' in env && env.t === 'react') {
       updateMessage(key, env.msgId, (m) => {
         const reactions = { ...m.reactions }
         if (env.emoji) reactions[reactor] = env.emoji
@@ -94,7 +129,7 @@ export function useChat(name, username) {
       })
       return true
     }
-    if (env?.t === 'delete') {
+    if ('t' in env && env.t === 'delete') {
       updateMessage(key, env.msgId, (m) => ({ ...m, deleted: true, reactions: {} }))
       return true
     }
@@ -103,7 +138,7 @@ export function useChat(name, username) {
 
   useEffect(() => {
     let alive = true
-    const socket = import.meta.env.VITE_RELAY_URL ? io(import.meta.env.VITE_RELAY_URL) : io()
+    const socket: Socket = import.meta.env.VITE_RELAY_URL ? io(import.meta.env.VITE_RELAY_URL) : io()
     socketRef.current = socket
     if (import.meta.env.DEV) window.__sableSocket = socket // dev-only debugging handle
 
@@ -116,12 +151,12 @@ export function useChat(name, username) {
       pubKeyRef.current = pubKey
       selfKeyRef.current = deriveSharedKey(keyPair.privateKey, pubKey)
       fingerprint(pubKey).then((code) => alive && setSafetyCode(code))
-      const keyFor = (jwk) => {
+      const keyFor = (jwk: JsonWebKey) => {
         const id = JSON.stringify(jwk)
         if (!keyCache.current.has(id)) {
           keyCache.current.set(id, deriveSharedKey(keyPair.privateKey, jwk))
         }
-        return keyCache.current.get(id)
+        return keyCache.current.get(id)!
       }
       return { pubKey, keyFor }
     })()
@@ -144,7 +179,7 @@ export function useChat(name, username) {
       })
       socket.on('disconnect', () => alive && setConnected(false))
 
-      socket.on('auth-error', (err) => {
+      socket.on('auth-error', (err: string) => {
         if (!alive) return
         setAuthError(err)
         socket.disconnect()
@@ -161,24 +196,24 @@ export function useChat(name, username) {
         setPasskeyRequired(true)
       })
 
-      socket.on('deleted-conversations', (map) => {
+      socket.on('deleted-conversations', (map: Record<string, number>) => {
         if (!alive) return
         deletedAtRef.current = new Map(Object.entries(map ?? {}).map(([k, v]) => [k, Number(v)]))
       })
 
-      socket.on('passkeys', (rows) => {
+      socket.on('passkeys', (rows: Passkey[]) => {
         if (!alive) return
         setPasskeys(rows)
       })
 
-      socket.on('announcement', (a) => {
+      socket.on('announcement', (a: Announcement) => {
         if (!alive) return
         setAnnouncement(a)
       })
 
-      const parseContacts = (list) => {
+      const parseContacts = (list: ContactRow[]): Contact[] => {
         return list.map(c => {
-          const isRequester = c.requester_id === clientId;
+          const isRequester = c.requester_id === clientId
           return {
             id: isRequester ? c.recipient_id : c.requester_id,
             name: isRequester ? c.recipient_name : c.requester_name,
@@ -193,7 +228,7 @@ export function useChat(name, username) {
         })
       }
 
-      socket.on('contacts', async (list) => {
+      socket.on('contacts', async (list: ContactRow[]) => {
         const { keyFor } = await ready
         if (!alive) return
         const peers = parseContacts(list)
@@ -201,7 +236,7 @@ export function useChat(name, username) {
         setContacts(peers)
       })
 
-      socket.on('contact-updated', async (list) => {
+      socket.on('contact-updated', async (list: ContactRow[]) => {
         const { keyFor } = await ready
         if (!alive) return
         const peers = parseContacts(list)
@@ -213,30 +248,30 @@ export function useChat(name, username) {
         setContacts(peers)
       })
 
-      socket.on('presence', ({ id, online, lastSeen }) => {
+      socket.on('presence', ({ id, online, lastSeen }: { id: string; online: boolean; lastSeen: number | null }) => {
         if (!alive) return
         setContacts((prev) => prev.map(c => c.id === id ? { ...c, online, lastSeen } : c))
       })
 
       // ciphertext history: decrypt and replay in order
-      socket.on('backlog', async (rows) => {
+      socket.on('backlog', async (rows: BacklogRow[]) => {
         const { keyFor } = await ready
-        const restored = {} // convoKey -> convo
-        const convoOf = (key) => (restored[key] ??= emptyConvo())
+        const restored: Record<string, Convo> = {}
+        const convoOf = (key: string) => (restored[key] ??= emptyConvo())
         for (const row of rows) {
-          let env
+          let env: OutgoingEnvelope
           try {
-            const key = row.from === clientId ? await selfKeyRef.current : await keyFor(row.senderPub)
+            const key = row.from === clientId ? await selfKeyRef.current! : await keyFor(JSON.parse(row.senderPub))
             env = JSON.parse(await decrypt(key, row.payload))
           } catch {
             continue // rotated keys or corrupt row — skip silently
           }
-          const convoKey = row.groupId ?? (row.from === clientId ? env._to : row.from)
+          const convoKey = row.groupId ?? (row.from === clientId ? ('_to' in env ? env._to : undefined) : row.from)
           if (!convoKey) continue
           const deletedAt = deletedAtRef.current.get(convoKey)
           if (deletedAt && row.ts <= deletedAt) continue // hidden by a "delete chat"
           const convo = convoOf(convoKey)
-          if (env.t === 'react') {
+          if ('t' in env && env.t === 'react') {
             const reactor = row.from === clientId ? 'me' : row.from
             convo.messages = convo.messages.map((m) =>
               m.id === env.msgId
@@ -245,7 +280,7 @@ export function useChat(name, username) {
             )
             continue
           }
-          if (env.t === 'delete') {
+          if ('t' in env && env.t === 'delete') {
             convo.messages = convo.messages.map((m) => (m.id === env.msgId ? { ...m, deleted: true, reactions: {} } : m))
             continue
           }
@@ -263,7 +298,7 @@ export function useChat(name, username) {
         if (!alive) return
         setConvos((current) => {
           // history loads once per connect; live messages that raced ahead win
-          const merged = { ...restored }
+          const merged: Record<string, Convo> = { ...restored }
           for (const [k, v] of Object.entries(current)) {
             if (!merged[k]) merged[k] = v
             else {
@@ -281,34 +316,44 @@ export function useChat(name, username) {
       })
 
       // ----- groups -----
-      socket.on('group-added', (g) => {
+      socket.on('group-added', (g: Group) => {
         if (!alive) return
         setGroups((gs) => [...gs.filter((x) => x.id !== g.id), g])
       })
-      socket.on('group-removed', ({ id, by }) => {
+      socket.on('group-removed', ({ id, by }: { id: string; by?: string }) => {
         if (!alive) return
         setGroups((gs) => gs.filter((x) => x.id !== id))
         if (by) addEntry(id, { id: crypto.randomUUID(), kind: 'sys', body: { text: `Group deleted by ${by}` }, ts: Date.now() }, false)
       })
-      socket.on('group-left', ({ id, name: memberName }) => {
+      socket.on('group-left', ({ id, name: memberName }: { id: string; name: string }) => {
         if (!alive) return
         addEntry(id, { id: crypto.randomUUID(), kind: 'sys', body: { text: `${memberName} left the group` }, ts: Date.now() }, false)
       })
-      socket.on('group-joined', ({ id, names }) => {
+      socket.on('group-joined', ({ id, names }: { id: string; names: string }) => {
         if (!alive) return
         addEntry(id, { id: crypto.randomUUID(), kind: 'sys', body: { text: `${names} joined the group` }, ts: Date.now() }, false)
       })
 
       // ----- profile -----
-      socket.on('profile', (profile) => {
+      socket.on('profile', (profile: MyProfile) => {
         if (!alive) return
         setMyProfile(profile)
       })
 
-      const onMessage = async ({ key, from, fromName, msgId, payload, ts, group }) => {
+      interface IncomingMessage {
+        key: string
+        from: string
+        fromName?: string
+        msgId: string
+        payload: EncryptedPayload
+        ts: number
+        group: boolean
+      }
+
+      const onMessage = async ({ key, from, fromName, msgId, payload, ts, group }: IncomingMessage) => {
         const keyPromise = peerKeyRef.current.get(from)
         if (!keyPromise) return
-        let env
+        let env: OutgoingEnvelope | null
         try {
           env = JSON.parse(await decrypt(await keyPromise, payload))
         } catch {
@@ -316,26 +361,26 @@ export function useChat(name, username) {
         }
         if (!alive) return
         if (env && applyControl(key, from, env)) return
-        const entry = env
+        const entry: ConvoMessage = env
           ? { id: msgId, kind: 'peer', from, name: fromName, body: toBody(env), ts }
-          : { id: msgId, kind: 'error', body: { t: 'text', text: `A message from ${fromName} could not be decrypted` }, ts }
+          : { id: msgId, kind: 'error', body: { text: `A message from ${fromName} could not be decrypted` }, ts }
         if (!group && env) socket.emit('delivered', { to: from, msgId })
         addEntry(key, entry, true)
       }
 
-      socket.on('dm', ({ from, fromName, id: msgId, payload, ts }) =>
+      socket.on('dm', ({ from, fromName, id: msgId, payload, ts }: { from: string; fromName?: string; id: string; payload: EncryptedPayload; ts: number }) =>
         onMessage({ key: from, from, fromName, msgId, payload, ts, group: false }))
 
-      socket.on('gdm', ({ groupId, from, fromName, id: msgId, payload, ts }) =>
+      socket.on('gdm', ({ groupId, from, fromName, id: msgId, payload, ts }: { groupId: string; from: string; fromName?: string; id: string; payload: EncryptedPayload; ts: number }) =>
         onMessage({ key: groupId, from, fromName, msgId, payload, ts, group: true }))
 
-      socket.on('delivered', ({ from, msgId }) => {
+      socket.on('delivered', ({ from, msgId }: { from: string; msgId: string }) => {
         if (!alive) return
         updateMessage(from, msgId, (m) => ({ ...m, status: 'delivered' }))
       })
 
-      socket.on('typing', ({ from, fromName }) => alive && setTypingFor(from, fromName))
-      socket.on('gtyping', ({ groupId, name: typer }) => alive && setTypingFor(groupId, typer))
+      socket.on('typing', ({ from, fromName }: { from: string; fromName: string }) => alive && setTypingFor(from, fromName))
+      socket.on('gtyping', ({ groupId, name: typer }: { groupId: string; name: string }) => alive && setTypingFor(groupId, typer))
     }
 
     setup()
@@ -347,7 +392,7 @@ export function useChat(name, username) {
     }
   }, [name]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const sealWith = async (keyPromise, env) => {
+  const sealWith = async (keyPromise: Promise<CryptoKey> | null | undefined, env: OutgoingEnvelope): Promise<EncryptedPayload | null> => {
     if (!keyPromise) return null
     return encrypt(await keyPromise, JSON.stringify(env))
   }
@@ -355,7 +400,7 @@ export function useChat(name, username) {
   const groupsRef = useRef(groups)
   groupsRef.current = groups
 
-  const sendEnvelope = useCallback(async (target, env, { localEntry = true } = {}) => {
+  const sendEnvelope = useCallback(async (target: string, env: OutgoingEnvelope, { localEntry = true }: { localEntry?: boolean } = {}) => {
     const socket = socketRef.current
     if (!socket) return
     const msgId = crypto.randomUUID()
@@ -363,7 +408,7 @@ export function useChat(name, username) {
     const group = groupsRef.current.find((g) => g.id === target)
 
     if (group) {
-      const payloads = {}
+      const payloads: Record<string, EncryptedPayload> = {}
       for (const m of group.members) {
         const sealed = await sealWith(
           m.id === clientId ? selfKeyRef.current : peerKeyRef.current.get(m.id),
@@ -374,12 +419,12 @@ export function useChat(name, username) {
       // mentions ride outside the encryption boundary too (plaintext member
       // ids only, never message text) purely so the server can route a
       // "you were mentioned" push without decrypting anything.
-      const mentions = Array.isArray(env.mentions) ? env.mentions.map((m) => m.id) : undefined
+      const mentions = 'mentions' in env && Array.isArray(env.mentions) ? env.mentions.map((m) => m.id) : undefined
       socket.emit('gdm', { groupId: target, id: msgId, payloads, ts, mentions })
     } else {
       const sealed = await sealWith(peerKeyRef.current.get(target), env)
       if (!sealed) return
-      const selfPayload = await sealWith(selfKeyRef.current, { ...env, _to: target })
+      const selfPayload = await sealWith(selfKeyRef.current, { ...env, _to: target } as OutgoingEnvelope)
       socket.emit('dm', { to: target, id: msgId, payload: sealed, selfPayload, ts })
     }
 
@@ -389,9 +434,9 @@ export function useChat(name, username) {
     return msgId
   }, [clientId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const send = useCallback((target, env) => sendEnvelope(target, env), [sendEnvelope])
+  const send = useCallback((target: string, env: OutgoingEnvelope) => sendEnvelope(target, env), [sendEnvelope])
 
-  const react = useCallback((target, msgId, emoji) => {
+  const react = useCallback((target: string, msgId: string, emoji: string | null) => {
     sendEnvelope(target, { t: 'react', msgId, emoji }, { localEntry: false })
     updateMessage(target, msgId, (m) => {
       const reactions = { ...m.reactions }
@@ -401,39 +446,39 @@ export function useChat(name, username) {
     })
   }, [sendEnvelope]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const deleteForAll = useCallback((target, msgId) => {
+  const deleteForAll = useCallback((target: string, msgId: string) => {
     sendEnvelope(target, { t: 'delete', msgId }, { localEntry: false })
     updateMessage(target, msgId, (m) => ({ ...m, deleted: true, reactions: {} }))
   }, [sendEnvelope]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const deleteForMe = useCallback((target, msgId) => {
+  const deleteForMe = useCallback((target: string, msgId: string) => {
     patchConvo(target, (c) => ({ ...c, messages: c.messages.filter((m) => m.id !== msgId) }))
   }, [])
 
-  const addLocalEntry = useCallback((target, body, kind = 'call') => {
+  const addLocalEntry = useCallback((target: string, body: MessageBody, kind: ConvoMessage['kind'] = 'call') => {
     addEntry(target, { id: crypto.randomUUID(), kind, body, ts: Date.now() }, false)
   }, [])
 
-  const createGroup = useCallback((groupName, memberIds) => {
+  const createGroup = useCallback((groupName: string, memberIds: string[]) => {
     socketRef.current?.emit('group-create', { name: groupName, members: memberIds })
   }, [])
 
-  const deleteGroup = useCallback((groupId) => {
+  const deleteGroup = useCallback((groupId: string) => {
     socketRef.current?.emit('group-delete', { groupId })
     setGroups((gs) => gs.filter((g) => g.id !== groupId))
   }, [])
 
-  const leaveGroup = useCallback((groupId) => {
+  const leaveGroup = useCallback((groupId: string) => {
     socketRef.current?.emit('group-leave', { groupId })
     setGroups((gs) => gs.filter((g) => g.id !== groupId))
   }, [])
 
-  const inviteToGroup = useCallback((groupId, memberIds) => {
+  const inviteToGroup = useCallback((groupId: string, memberIds: string[]) => {
     socketRef.current?.emit('group-invite', { groupId, members: memberIds })
   }, [])
 
   const lastTypingSent = useRef(0)
-  const notifyTyping = useCallback((target) => {
+  const notifyTyping = useCallback((target: string) => {
     const now = Date.now()
     if (now - lastTypingSent.current <= 1200) return
     lastTypingSent.current = now
@@ -441,37 +486,37 @@ export function useChat(name, username) {
     socketRef.current?.emit(isGroup ? 'gtyping' : 'typing', isGroup ? { groupId: target } : { to: target })
   }, [])
 
-  const markRead = useCallback((target) => {
+  const markRead = useCallback((target: string) => {
     setConvos((c) => (c[target]?.unread ? { ...c, [target]: { ...c[target], unread: 0 } } : c))
   }, [])
 
-  const sendContactRequest = useCallback((to) => {
+  const sendContactRequest = useCallback((to: string) => {
     socketRef.current?.emit('contact-request', { to })
   }, [])
 
-  const acceptContactRequest = useCallback((to) => {
+  const acceptContactRequest = useCallback((to: string) => {
     socketRef.current?.emit('contact-accept', { to })
   }, [])
 
-  const rejectContactRequest = useCallback((to) => {
+  const rejectContactRequest = useCallback((to: string) => {
     socketRef.current?.emit('contact-reject', { to })
   }, [])
 
-  const removeContact = useCallback((to) => {
+  const removeContact = useCallback((to: string) => {
     socketRef.current?.emit('contact-remove', { to })
   }, [])
 
-  const blockContact = useCallback((to) => {
+  const blockContact = useCallback((to: string) => {
     socketRef.current?.emit('contact-block', { to })
   }, [])
 
-  const unblockContact = useCallback((to) => {
+  const unblockContact = useCallback((to: string) => {
     socketRef.current?.emit('contact-unblock', { to })
   }, [])
 
   // Deletes my side of a conversation's history. The peer relationship and
   // any future messages are unaffected — this only clears what's shown.
-  const deleteConversation = useCallback((peerId) => {
+  const deleteConversation = useCallback((peerId: string) => {
     socketRef.current?.emit('delete-conversation', { peerId })
     deletedAtRef.current.set(peerId, Date.now())
     patchConvo(peerId, () => emptyConvo())
@@ -486,21 +531,24 @@ export function useChat(name, username) {
     setPasskeyError(null)
     try {
       const { startAuthentication } = await import('@simplewebauthn/browser')
-      const optionsRes = await new Promise((resolve) => socket.emit('webauthn-login-options', { id: clientId }, resolve))
+      type LoginOptions = { noPasskey?: boolean; options?: Parameters<typeof startAuthentication>[0]['optionsJSON'] }
+      const optionsRes = await new Promise<LoginOptions>((resolve) =>
+        socket.emit('webauthn-login-options', { id: clientId }, resolve))
       if (optionsRes?.noPasskey) {
         setPasskeyRequired(false) // stale — proceed as a normal login
         socket.emit('hello', { id: clientId, name, username, pubKey: pubKeyRef.current })
         return
       }
-      const response = await startAuthentication({ optionsJSON: optionsRes.options })
-      const verifyRes = await new Promise((resolve) =>
+      const response = await startAuthentication({ optionsJSON: optionsRes.options! })
+      const verifyRes = await new Promise<PasskeyActionResult>((resolve) =>
         socket.emit('webauthn-login-verify', { id: clientId, name, username, pubKey: pubKeyRef.current, response }, resolve)
       )
       if (verifyRes?.ok) setPasskeyRequired(false)
       else setPasskeyError(verifyRes?.error ?? 'Passkey verification failed')
     } catch (e) {
       // user cancelled the browser prompt, or no authenticator available
-      setPasskeyError(e?.code === 'ERROR_CEREMONY_ABORTED' ? 'Cancelled' : e?.message ?? 'Passkey login failed')
+      const err = e as { code?: string; message?: string }
+      setPasskeyError(err?.code === 'ERROR_CEREMONY_ABORTED' ? 'Cancelled' : err?.message ?? 'Passkey login failed')
     }
   }, [clientId, name, username])
 
@@ -519,28 +567,31 @@ export function useChat(name, username) {
   }, [])
 
   const fetchPasskeys = useCallback(() => {
-    socketRef.current?.emit('get-passkeys', null, (rows) => setPasskeys(rows))
+    socketRef.current?.emit('get-passkeys', null, (rows: Passkey[]) => setPasskeys(rows))
   }, [])
 
-  const deletePasskey = useCallback((credentialId) => {
+  const deletePasskey = useCallback((credentialId: string) => {
     socketRef.current?.emit('delete-passkey', { credentialId })
   }, [])
 
   // Registers a new passkey for the *currently logged-in* identity. After
   // this succeeds, future logins for this username require it.
-  const registerPasskey = useCallback(async () => {
+  const registerPasskey = useCallback(async (): Promise<PasskeyActionResult> => {
     const socket = socketRef.current
     if (!socket) return { ok: false, error: 'Not connected' }
     try {
       const { startRegistration } = await import('@simplewebauthn/browser')
-      const optionsRes = await new Promise((resolve) => socket.emit('webauthn-register-options', null, resolve))
+      type RegisterOptions = { options?: Parameters<typeof startRegistration>[0]['optionsJSON'] }
+      const optionsRes = await new Promise<RegisterOptions>((resolve) =>
+        socket.emit('webauthn-register-options', null, resolve))
       if (!optionsRes?.options) return { ok: false, error: 'Could not start registration' }
       const response = await startRegistration({ optionsJSON: optionsRes.options })
-      const verifyRes = await new Promise((resolve) => socket.emit('webauthn-register-verify', { response }, resolve))
+      const verifyRes = await new Promise<PasskeyActionResult>((resolve) => socket.emit('webauthn-register-verify', { response }, resolve))
       if (verifyRes?.ok) fetchPasskeys()
       return verifyRes ?? { ok: false, error: 'No response' }
     } catch (e) {
-      return { ok: false, error: e?.code === 'ERROR_CEREMONY_ABORTED' ? 'Cancelled' : e?.message ?? 'Could not add passkey' }
+      const err = e as { code?: string; message?: string }
+      return { ok: false, error: err?.code === 'ERROR_CEREMONY_ABORTED' ? 'Cancelled' : err?.message ?? 'Could not add passkey' }
     }
   }, [fetchPasskeys])
 

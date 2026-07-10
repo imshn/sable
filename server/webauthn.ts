@@ -6,7 +6,12 @@ import {
   verifyRegistrationResponse,
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
+  type RegistrationResponseJSON,
+  type AuthenticationResponseJSON,
+  type VerifiedRegistrationResponse,
+  type VerifiedAuthenticationResponse,
 } from '@simplewebauthn/server'
+import type { PasskeyCredentialRow } from './types.js'
 
 const RP_NAME = 'Sable'
 // rpID must be a domain the frontend is served from (not the relay's domain —
@@ -14,16 +19,16 @@ const RP_NAME = 'Sable'
 const RP_ID = process.env.WEBAUTHN_RP_ID || 'localhost'
 const ORIGINS = (process.env.WEBAUTHN_ORIGIN || 'http://localhost:5173').split(',').map((s) => s.trim())
 
-export const toB64 = (bytes) => Buffer.from(bytes).toString('base64')
-export const fromB64 = (str) => new Uint8Array(Buffer.from(str, 'base64'))
+export const toB64 = (bytes: Uint8Array): string => Buffer.from(bytes).toString('base64')
+export const fromB64 = (str: string): Uint8Array => new Uint8Array(Buffer.from(str, 'base64'))
 
-const asCredentialList = (passkeys) =>
+const asCredentialList = (passkeys: PasskeyCredentialRow[]) =>
   passkeys.map((pk) => ({
     id: pk.credential_id,
     transports: pk.transports ? JSON.parse(pk.transports) : undefined,
   }))
 
-export async function makeRegistrationOptions(username, existingPasskeys) {
+export async function makeRegistrationOptions(username: string, existingPasskeys: PasskeyCredentialRow[]) {
   return generateRegistrationOptions({
     rpName: RP_NAME,
     rpID: RP_ID,
@@ -34,11 +39,11 @@ export async function makeRegistrationOptions(username, existingPasskeys) {
   })
 }
 
-export async function checkRegistration(response, expectedChallenge) {
+export async function checkRegistration(response: RegistrationResponseJSON, expectedChallenge: string): Promise<VerifiedRegistrationResponse> {
   return verifyRegistrationResponse({ response, expectedChallenge, expectedOrigin: ORIGINS, expectedRPID: RP_ID })
 }
 
-export async function makeAuthenticationOptions(passkeys) {
+export async function makeAuthenticationOptions(passkeys: PasskeyCredentialRow[]) {
   return generateAuthenticationOptions({
     rpID: RP_ID,
     allowCredentials: asCredentialList(passkeys),
@@ -46,7 +51,7 @@ export async function makeAuthenticationOptions(passkeys) {
   })
 }
 
-export async function checkAuthentication(response, expectedChallenge, passkeyRow) {
+export async function checkAuthentication(response: AuthenticationResponseJSON, expectedChallenge: string, passkeyRow: PasskeyCredentialRow): Promise<VerifiedAuthenticationResponse> {
   return verifyAuthenticationResponse({
     response,
     expectedChallenge,
@@ -54,7 +59,7 @@ export async function checkAuthentication(response, expectedChallenge, passkeyRo
     expectedRPID: RP_ID,
     credential: {
       id: passkeyRow.credential_id,
-      publicKey: fromB64(passkeyRow.public_key),
+      publicKey: fromB64(passkeyRow.public_key) as Uint8Array<ArrayBuffer>,
       counter: passkeyRow.counter,
       transports: passkeyRow.transports ? JSON.parse(passkeyRow.transports) : undefined,
     },

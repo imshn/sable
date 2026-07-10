@@ -1,9 +1,10 @@
 // Looping call ringtone via WebAudio — two soft tones, repeating.
 // No audio assets, everything synthesized. start() is safe to call repeatedly.
-let ctx = null
-let timer = null
+let ctx: AudioContext | null = null
+let timer: ReturnType<typeof setInterval> | null = null
 
-const beep = (freq, at, dur) => {
+const beep = (freq: number, at: number, dur: number) => {
+  if (!ctx) return
   const osc = ctx.createOscillator()
   const gain = ctx.createGain()
   osc.type = 'sine'
@@ -17,7 +18,7 @@ const beep = (freq, at, dur) => {
   osc.stop(at + dur)
 }
 
-export function startRing(outgoing = false) {
+export function startRing(outgoing = false): void {
   if (timer) return
   try {
     ctx = ctx ?? new AudioContext()
@@ -26,6 +27,7 @@ export function startRing(outgoing = false) {
     return
   }
   const pattern = () => {
+    if (!ctx) return
     const t = ctx.currentTime + 0.05
     if (outgoing) {
       beep(430, t, 0.9) // single long ring-back tone
@@ -38,7 +40,7 @@ export function startRing(outgoing = false) {
   timer = setInterval(pattern, outgoing ? 2600 : 1800)
 }
 
-export function stopRing() {
-  clearInterval(timer)
+export function stopRing(): void {
+  if (timer) clearInterval(timer)
   timer = null
 }

@@ -1,14 +1,28 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect, type RefObject } from 'react'
+import type { Socket } from 'socket.io-client'
 
-export function InvitePage({ code, socketRef, onJoin, onCancel }) {
-  const [invite, setInvite] = useState(null)
-  const [error, setError] = useState(null)
+interface Invite {
+  creator_id: string
+  creator_name: string
+  creator_username: string
+}
+
+interface InvitePageProps {
+  code: string
+  socketRef: RefObject<Socket | null>
+  onJoin: (creatorId: string) => void
+  onCancel: () => void
+}
+
+export function InvitePage({ code, socketRef, onJoin, onCancel }: InvitePageProps) {
+  const [invite, setInvite] = useState<Invite | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!socketRef.current) return
-    socketRef.current.emit('get-invite', { code }, (response) => {
+    socketRef.current.emit('get-invite', { code }, (response: { error?: string; invite?: Invite }) => {
       if (response.error) setError(response.error)
-      else setInvite(response.invite)
+      else setInvite(response.invite ?? null)
     })
   }, [code, socketRef])
 

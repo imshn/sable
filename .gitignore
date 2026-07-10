@@ -4,3 +4,4 @@ dist
 .playwright-mcp
 *.png
 .env*
+*.tsbuildinfo

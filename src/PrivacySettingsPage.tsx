@@ -1,13 +1,25 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { Icon } from './icons.jsx'
+import { useState, useEffect, useRef, type ReactNode } from 'react'
+import type { Socket } from 'socket.io-client'
+import { Icon } from './icons.tsx'
+import type { PrivacySettings } from './types.ts'
 
-const PRIVACY_OPTIONS = [
+type PrivacyLevel = 'everyone' | 'contacts' | 'nobody'
+type PrivacyKey = keyof PrivacySettings
+
+const PRIVACY_OPTIONS: { value: PrivacyLevel; label: string }[] = [
   { value: 'everyone', label: 'Everyone' },
   { value: 'contacts', label: 'Contacts' },
   { value: 'nobody',   label: 'Nobody' },
 ]
 
-function PrivacyRow({ label, description, value, onChange }) {
+interface PrivacyRowProps {
+  label: string
+  description?: ReactNode
+  value: PrivacyLevel
+  onChange: (value: PrivacyLevel) => void
+}
+
+function PrivacyRow({ label, description, value, onChange }: PrivacyRowProps) {
   return (
     <div className="privacy-row">
       <div className="privacy-row-label">
@@ -31,22 +43,23 @@ function PrivacyRow({ label, description, value, onChange }) {
   )
 }
 
-export function PrivacySettingsPage({ socket }) {
-  const [settings, setSettings] = useState(null)
-  const [toast, setToast] = useState(null)
-  const toastTimer = useRef(null)
+export function PrivacySettingsPage({ socket }: { socket: Socket | null | undefined }) {
+  const [settings, setSettings] = useState<PrivacySettings | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useEffect(() => {
     if (!socket) return
-    const handleSettings = (s) => setSettings(s)
+    const handleSettings = (s: PrivacySettings) => setSettings(s)
     socket.on('privacy-settings', handleSettings)
     socket.emit('get-privacy-settings')
-    return () => socket.off('privacy-settings', handleSettings)
+    return () => { socket.off('privacy-settings', handleSettings) }
   }, [socket])
 
   useEffect(() => () => clearTimeout(toastTimer.current), [])
 
-  const update = (key, val) => {
+  const update = (key: PrivacyKey, val: PrivacyLevel) => {
+    if (!settings) return
     const next = { ...settings, [key]: val }
     setSettings(next)
     socket?.emit('save-privacy-settings', next)

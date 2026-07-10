@@ -1,5 +1,6 @@
-import React, { useState } from 'react'
-import { Icon } from './icons.jsx'
+import { useState } from 'react'
+import type { Socket } from 'socket.io-client'
+import { Icon } from './icons.tsx'
 
 const CATEGORIES = [
   { value: 'spam',                 label: 'Spam',                  desc: 'Sending unwanted or repetitive messages' },
@@ -8,10 +9,17 @@ const CATEGORIES = [
   { value: 'inappropriate_content',label: 'Inappropriate Content', desc: 'Sharing explicit or offensive material' },
   { value: 'scam',                 label: 'Scam or Fraud',         desc: 'Attempting to deceive or defraud others' },
   { value: 'other',                label: 'Other',                 desc: 'Something else not listed above' },
-]
+] as const
 
-export function ReportModal({ targetName, targetId, socket, onClose }) {
-  const [category, setCategory] = useState(null)
+interface ReportModalProps {
+  targetName: string
+  targetId: string
+  socket: Socket | null | undefined
+  onClose: () => void
+}
+
+export function ReportModal({ targetName, targetId, socket, onClose }: ReportModalProps) {
+  const [category, setCategory] = useState<string | null>(null)
   const [details, setDetails] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone] = useState(false)

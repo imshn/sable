@@ -1,17 +1,17 @@
 const RELAY_BASE = import.meta.env.VITE_RELAY_URL ?? ''
 
-export const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window
+export const pushSupported = (): boolean => 'serviceWorker' in navigator && 'PushManager' in window
 
 // VAPID public key comes as a URL-safe base64 string; the Push API wants
 // the raw bytes as a Uint8Array.
-function urlBase64ToUint8Array(base64) {
+function urlBase64ToUint8Array(base64: string): Uint8Array {
   const padding = '='.repeat((4 - (base64.length % 4)) % 4)
   const b64 = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/')
   const raw = atob(b64)
   return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)))
 }
 
-export async function currentPushSubscription() {
+export async function currentPushSubscription(): Promise<PushSubscription | null> {
   if (!pushSupported()) return null
   const reg = await navigator.serviceWorker.getRegistration('/sw.js')
   return (await reg?.pushManager.getSubscription()) ?? null
@@ -19,7 +19,7 @@ export async function currentPushSubscription() {
 
 // Prompts for permission (if needed) and subscribes. Returns the
 // subscription, or null if unsupported/denied/no key configured.
-export async function subscribeToPush() {
+export async function subscribeToPush(): Promise<PushSubscription | null> {
   if (!pushSupported()) return null
   if (Notification.permission === 'denied') return null
 
@@ -35,11 +35,11 @@ export async function subscribeToPush() {
 
   return reg.pushManager.subscribe({
     userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(publicKey),
+    applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
   })
 }
 
-export async function unsubscribeFromPush() {
+export async function unsubscribeFromPush(): Promise<PushSubscription | null> {
   const sub = await currentPushSubscription()
   if (sub) await sub.unsubscribe()
   return sub

@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { startRing, stopRing } from './ring.js'
-import { debug } from './log.js'
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
+import type { Socket } from 'socket.io-client'
+import { startRing, stopRing } from './ring.ts'
+import { debug } from './log.ts'
+import type { CallState, CallMode, QualitySample, QualityLevel } from './types.ts'
 
 // WebRTC calls: 1:1 and group mesh. Media is peer-to-peer and DTLS-SRTP
 // encrypted by the browser; the relay only carries SDP/ICE and ring events.
@@ -10,8 +12,8 @@ import { debug } from './log.js'
 // many pairs. The relay's /turn endpoint issues fresh credentials (configured
 // server-side); STUN alone is the fallback if none are configured.
 const RELAY_BASE = import.meta.env.VITE_RELAY_URL ?? ''
-let cachedTurn = null
-async function rtcConfig() {
+let cachedTurn: RTCIceServer[] | null = null
+async function rtcConfig(): Promise<RTCConfiguration> {
   if (!cachedTurn) {
     try {
       const r = await fetch(`${RELAY_BASE}/turn`, { signal: AbortSignal.timeout(6000) })
@@ -20,32 +22,78 @@ async function rtcConfig() {
       cachedTurn = []
     }
   }
-  return { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, ...cachedTurn] }
+  return { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, ...(cachedTurn ?? [])] }
 }
 
-export function useCall(socketRef, myId, onLog) {
-  // { status:'idle' } | { status:'incoming'|'outgoing'|'active', mode:'direct'|'group', peerId?, groupId?, video }
-  const [call, setCall] = useState({ status: 'idle' })
-  const [localStream, setLocalStream] = useState(null)
-  const [remoteStreams, setRemoteStreams] = useState({}) // peerId -> stream
+export type CallLogKind = 'ended' | 'missed' | 'declined' | 'cancelled' | 'media-error'
+export type OnLog = (target: string, log: { kind: CallLogKind; dur?: number }) => void
+
+interface OfferPayload {
+  from: string
+  sdp: RTCSessionDescriptionInit
+  video?: boolean
+  group?: string
+  restart?: boolean
+}
+
+interface AnswerPayload {
+  from: string
+  sdp: RTCSessionDescriptionInit
+}
+
+interface IcePayload {
+  from: string
+  candidate: RTCIceCandidateInit
+}
+
+interface EndPayload {
+  from: string
+}
+
+interface GroupRingPayload {
+  groupId: string
+  from: string
+  name?: string
+}
+
+interface GroupJoinLeavePayload {
+  groupId: string
+  from: string
+}
+
+interface ShareStatePayload {
+  from: string
+  sharing: boolean
+}
+
+interface CamMicStatePayload {
+  from: string
+  camOn?: boolean
+  micOn?: boolean
+}
+
+export function useCall(socketRef: RefObject<Socket | null>, myId: string, onLog: OnLog) {
+  const [call, setCall] = useState<CallState>({ status: 'idle' })
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null)
+  const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({})
   const [micOn, setMicOn] = useState(true)
   const [camOn, setCamOn] = useState(true)
   const [sharing, setSharing] = useState(false)
-  const [sharers, setSharers] = useState({}) // remote peerId -> true
-  const [camsOff, setCamsOff] = useState({}) // remote peerId -> true (their camera is off)
-  const [micsOff, setMicsOff] = useState({}) // remote peerId -> true (their mic is off)
-  const [quality, setQuality] = useState(null) // { level, rttMs, lossPct, kbps }
+  const [sharers, setSharers] = useState<Record<string, true>>({})
+  const [camsOff, setCamsOff] = useState<Record<string, true>>({})
+  const [micsOff, setMicsOff] = useState<Record<string, true>>({})
+  const [quality, setQuality] = useState<QualitySample | null>(null)
   const [lowBandwidth, setLowBandwidth] = useState(false)
-  const restartAttempts = useRef(new Map()) // peerId -> count
-  const statsPrev = useRef(new Map()) // peerId -> { lost, received, bytes, ts }
+  const restartAttempts = useRef(new Map<string, number>())
+  const statsPrev = useRef(new Map<string, { lost: number; received: number; bytes: number; ts: number }>())
   const lowBwStreak = useRef(0)
 
-  const pcs = useRef(new Map()) // peerId -> RTCPeerConnection
-  const pendingIce = useRef(new Map()) // peerId -> [candidates]
-  const localRef = useRef(null)
-  const screenRef = useRef(null)
-  const stopShareRef = useRef(null)
-  const offerRef = useRef(null)
+  const pcs = useRef(new Map<string, RTCPeerConnection>())
+  const pendingIce = useRef(new Map<string, RTCIceCandidateInit[]>())
+  const localRef = useRef<MediaStream | null>(null)
+  const screenRef = useRef<MediaStream | null>(null)
+  const stopShareRef = useRef<() => Promise<void>>(async () => {})
+  const offerRef = useRef<RTCSessionDescriptionInit | null>(null)
   const activeSince = useRef(0)
   const callRef = useRef(call)
   callRef.current = call
@@ -64,18 +112,18 @@ export function useCall(socketRef, myId, onLog) {
   // after three consecutive starved samples so audio survives bad networks.
   useEffect(() => {
     if (call.status !== 'active') return
-    const LEVELS = { excellent: 2, good: 1, poor: 0 }
+    const LEVELS: Record<QualityLevel, number> = { excellent: 2, good: 1, poor: 0 }
     const interval = setInterval(async () => {
-      let worst = null
+      let worst: QualitySample | null = null
       for (const [peerId, pc] of pcs.current) {
         if (pc.connectionState !== 'connected') continue
-        let stats
+        let stats: RTCStatsReport
         try {
           stats = await pc.getStats()
         } catch {
           continue
         }
-        let rtt = null
+        let rtt: number | null = null
         let lost = 0
         let received = 0
         let bytes = 0
@@ -96,9 +144,9 @@ export function useCall(socketRef, myId, onLog) {
         const dRecv = Math.max(0, received - prev.received)
         const lossPct = dLost + dRecv > 0 ? (dLost / (dLost + dRecv)) * 100 : 0
         const kbps = Math.round(Math.max(0, ((bytes - prev.bytes) * 8) / (Date.now() - prev.ts)))
-        const level =
+        const level: QualityLevel =
           lossPct > 6 || (rtt ?? 0) > 500 ? 'poor' : lossPct > 2 || (rtt ?? 0) > 250 ? 'good' : 'excellent'
-        const sample = { level, rttMs: rtt != null ? Math.round(rtt) : null, lossPct: +lossPct.toFixed(1), kbps }
+        const sample: QualitySample = { level, rttMs: rtt != null ? Math.round(rtt) : null, lossPct: +lossPct.toFixed(1), kbps }
         if (!worst || LEVELS[sample.level] < LEVELS[worst.level]) worst = sample
       }
       if (!worst) return
@@ -118,7 +166,7 @@ export function useCall(socketRef, myId, onLog) {
       }
     }, 2000)
     return () => clearInterval(interval)
-  }, [call.status])
+  }, [call.status]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const teardown = useCallback(() => {
     pcs.current.forEach((pc) => pc.close())
@@ -149,7 +197,7 @@ export function useCall(socketRef, myId, onLog) {
   // ICE failure recovery: restart + renegotiate instead of dropping the call.
   // Only the peer with the lexically smaller id initiates, so both sides
   // detecting the failure never produce colliding offers (no glare).
-  const attemptRestart = async (peerId) => {
+  const attemptRestart = async (peerId: string) => {
     const cur = callRef.current
     const pc = pcs.current.get(peerId)
     if (!pc || (cur.status !== 'active' && cur.status !== 'outgoing')) return
@@ -178,11 +226,11 @@ export function useCall(socketRef, myId, onLog) {
         group: cur.mode === 'group' ? cur.groupId : undefined,
       })
     } catch (e) {
-      debug('ice restart error', e.message)
+      debug('ice restart error', (e as Error).message)
     }
   }
 
-  const logEnd = (kind) => {
+  const logEnd = (kind: CallLogKind) => {
     const { peerId, groupId, status } = callRef.current
     const target = groupId ?? peerId
     if (!target) return
@@ -190,17 +238,17 @@ export function useCall(socketRef, myId, onLog) {
     else logRef.current?.(target, { kind })
   }
 
-  const getMedia = async (video) => {
+  const getMedia = async (video?: boolean): Promise<MediaStream> => {
     const stream = await navigator.mediaDevices.getUserMedia({ video, audio: true })
     localRef.current = stream
     setLocalStream(stream)
     return stream
   }
 
-  const makePc = async (peerId) => {
+  const makePc = async (peerId: string): Promise<RTCPeerConnection> => {
     const pc = new RTCPeerConnection(await rtcConfig())
     pcs.current.set(peerId, pc)
-    localRef.current?.getTracks().forEach((t) => pc.addTrack(t, localRef.current))
+    localRef.current?.getTracks().forEach((t) => pc.addTrack(t, localRef.current!))
     // if a screen share is running, newcomers should see the screen, not the camera
     const screenTrack = screenRef.current?.getVideoTracks()[0]
     if (screenTrack) {
@@ -228,7 +276,7 @@ export function useCall(socketRef, myId, onLog) {
     return pc
   }
 
-  const dropPeer = (peerId) => {
+  const dropPeer = (peerId: string) => {
     pcs.current.get(peerId)?.close()
     pcs.current.delete(peerId)
     pendingIce.current.delete(peerId)
@@ -254,11 +302,11 @@ export function useCall(socketRef, myId, onLog) {
     })
   }
 
-  const flushIce = async (peerId) => {
+  const flushIce = async (peerId: string) => {
     const pc = pcs.current.get(peerId)
     for (const candidate of pendingIce.current.get(peerId) ?? []) {
       try {
-        await pc.addIceCandidate(candidate)
+        await pc?.addIceCandidate(candidate)
       } catch { /* stale */ }
     }
     pendingIce.current.delete(peerId)
@@ -268,7 +316,7 @@ export function useCall(socketRef, myId, onLog) {
     const socket = socketRef.current
     if (!socket) return
 
-    const onOffer = async ({ from, sdp, video, group, restart }) => {
+    const onOffer = async ({ from, sdp, video, group, restart }: OfferPayload) => {
       const cur = callRef.current
       // renegotiation after an ICE restart — answer on the existing connection
       if (restart) {
@@ -299,7 +347,7 @@ export function useCall(socketRef, myId, onLog) {
       setCall({ status: 'incoming', mode: 'direct', peerId: from, video: video !== false })
     }
 
-    const onAnswer = async ({ from, sdp }) => {
+    const onAnswer = async ({ from, sdp }: AnswerPayload) => {
       const pc = pcs.current.get(from)
       if (!pc || pc.signalingState !== 'have-local-offer') return
       await pc.setRemoteDescription(sdp)
@@ -310,7 +358,7 @@ export function useCall(socketRef, myId, onLog) {
       }
     }
 
-    const onIce = async ({ from, candidate }) => {
+    const onIce = async ({ from, candidate }: IcePayload) => {
       const pc = pcs.current.get(from)
       if (pc?.remoteDescription) {
         try {
@@ -321,7 +369,7 @@ export function useCall(socketRef, myId, onLog) {
       }
     }
 
-    const onEnd = ({ from }) => {
+    const onEnd = ({ from }: EndPayload) => {
       const cur = callRef.current
       if (cur.mode === 'group') {
         dropPeer(from)
@@ -335,12 +383,12 @@ export function useCall(socketRef, myId, onLog) {
     }
 
     // ----- group call events -----
-    const onGroupRing = ({ groupId, from, name }) => {
+    const onGroupRing = ({ groupId, from, name }: GroupRingPayload) => {
       if (callRef.current.status !== 'idle') return
       setCall({ status: 'incoming', mode: 'group', groupId, peerId: from, callerName: name, video: true })
     }
 
-    const onGroupJoin = async ({ groupId, from }) => {
+    const onGroupJoin = async ({ groupId, from }: GroupJoinLeavePayload) => {
       const cur = callRef.current
       if (cur.mode !== 'group' || cur.groupId !== groupId || cur.status !== 'active') return
       // existing participants offer to the newcomer
@@ -350,7 +398,7 @@ export function useCall(socketRef, myId, onLog) {
       socketRef.current?.emit('call-offer', { to: from, sdp: offer, group: groupId })
     }
 
-    const onGroupLeave = ({ groupId, from }) => {
+    const onGroupLeave = ({ groupId, from }: GroupJoinLeavePayload) => {
       const cur = callRef.current
       if (cur.groupId !== groupId) return
       if (cur.status === 'incoming' && cur.peerId === from) {
@@ -364,7 +412,7 @@ export function useCall(socketRef, myId, onLog) {
 
     // presenter announcements: track remote sharers, and enforce a single
     // presenter — if someone else starts sharing while we are, we stop
-    const onShareState = ({ from, sharing: isSharing }) => {
+    const onShareState = ({ from, sharing: isSharing }: ShareStatePayload) => {
       setSharers((s) => {
         const next = { ...s }
         if (isSharing) next[from] = true
@@ -374,7 +422,7 @@ export function useCall(socketRef, myId, onLog) {
       if (isSharing && screenRef.current) stopShareRef.current?.()
     }
 
-    const onCamState = ({ from, camOn }) => {
+    const onCamState = ({ from, camOn }: CamMicStatePayload) => {
       setCamsOff((s) => {
         const next = { ...s }
         if (camOn) delete next[from]
@@ -383,7 +431,7 @@ export function useCall(socketRef, myId, onLog) {
       })
     }
 
-    const onMicState = ({ from, micOn }) => {
+    const onMicState = ({ from, micOn }: CamMicStatePayload) => {
       setMicsOff((s) => {
         const next = { ...s }
         if (micOn) delete next[from]
@@ -419,7 +467,7 @@ export function useCall(socketRef, myId, onLog) {
     }
   }, [socketRef, teardown]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const startCall = useCallback(async (peerId, video = true) => {
+  const startCall = useCallback(async (peerId: string, video = true) => {
     if (callRef.current.status !== 'idle') return
     try {
       await getMedia(video)
@@ -434,7 +482,7 @@ export function useCall(socketRef, myId, onLog) {
     setCall({ status: 'outgoing', mode: 'direct', peerId, video })
   }, [socketRef]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const startGroupCall = useCallback(async (groupId) => {
+  const startGroupCall = useCallback(async (groupId: string) => {
     if (callRef.current.status !== 'idle') return
     try {
       await getMedia(true)
@@ -452,7 +500,7 @@ export function useCall(socketRef, myId, onLog) {
     try {
       await getMedia(video)
     } catch {
-      logRef.current?.(groupId ?? peerId, { kind: 'media-error' })
+      logRef.current?.((groupId ?? peerId)!, { kind: 'media-error' })
       if (mode === 'direct') socketRef.current?.emit('call-decline', { to: peerId })
       teardown()
       return
@@ -464,9 +512,9 @@ export function useCall(socketRef, myId, onLog) {
       setCall({ status: 'active', mode: 'group', groupId, video })
       return
     }
-    const pc = await makePc(peerId)
-    await pc.setRemoteDescription(offerRef.current)
-    await flushIce(peerId)
+    const pc = await makePc(peerId!)
+    await pc.setRemoteDescription(offerRef.current!)
+    await flushIce(peerId!)
     const answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
     socketRef.current?.emit('call-answer', { to: peerId, sdp: answer })
@@ -489,7 +537,7 @@ export function useCall(socketRef, myId, onLog) {
     teardown()
   }, [socketRef, teardown]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const setMicEnabled = (enabled) => {
+  const setMicEnabled = (enabled: boolean) => {
     localRef.current?.getAudioTracks().forEach((t) => { t.enabled = enabled })
     setMicOn(enabled)
     for (const peerId of pcs.current.keys()) {
@@ -499,9 +547,9 @@ export function useCall(socketRef, myId, onLog) {
 
   const toggleMic = useCallback(() => {
     setMicEnabled(!(localRef.current?.getAudioTracks().some((t) => t.enabled)))
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const setCamEnabled = (enabled) => {
+  const setCamEnabled = (enabled: boolean) => {
     localRef.current?.getVideoTracks().forEach((t) => { t.enabled = enabled })
     setCamOn(enabled)
     for (const peerId of pcs.current.keys()) {
@@ -517,7 +565,7 @@ export function useCall(socketRef, myId, onLog) {
 
   // swap the outgoing video track on every connection; browser picker offers
   // tab / window / entire screen natively
-  const announceShare = (isSharing) => {
+  const announceShare = (isSharing: boolean) => {
     for (const peerId of pcs.current.keys()) {
       socketRef.current?.emit('share-state', { to: peerId, sharing: isSharing })
     }
@@ -540,7 +588,7 @@ export function useCall(socketRef, myId, onLog) {
 
   const toggleShare = useCallback(async () => {
     if (screenRef.current) return stopShare()
-    let display
+    let display: MediaStream
     try {
       display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
     } catch {
@@ -556,10 +604,10 @@ export function useCall(socketRef, myId, onLog) {
     announceShare(true)
     setLocalStream(new MediaStream([track, ...(localRef.current?.getAudioTracks() ?? [])]))
     setSharing(true)
-  }, [stopShare]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [stopShare])
 
   // ring one group member into an ongoing group call
-  const inviteToCall = useCallback((memberId) => {
+  const inviteToCall = useCallback((memberId: string) => {
     const { groupId, status } = callRef.current
     if (status === 'active' && groupId) {
       socketRef.current?.emit('gcall-ring', { groupId, to: memberId })
@@ -572,3 +620,6 @@ export function useCall(socketRef, myId, onLog) {
     startCall, startGroupCall, accept, decline, hangup, toggleMic, toggleCam, toggleShare, inviteToCall,
   }
 }
+
+export type UseCallReturn = ReturnType<typeof useCall>
+export type { CallMode }

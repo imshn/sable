@@ -1,7 +1,17 @@
-import React from 'react'
-import { Icon } from './icons.jsx'
+import type { ReactNode } from 'react'
+import { Icon } from './icons.tsx'
 
-export function ConfirmModal({ title, message, onConfirm, onCancel, confirmText = 'Confirm', cancelText = 'Cancel', danger = false }) {
+interface ConfirmModalProps {
+  title: string
+  message: ReactNode
+  onConfirm: () => void
+  onCancel: () => void
+  confirmText?: string
+  cancelText?: string
+  danger?: boolean
+}
+
+export function ConfirmModal({ title, message, onConfirm, onCancel, confirmText = 'Confirm', cancelText = 'Cancel', danger = false }: ConfirmModalProps) {
   return (
     <div className="modal-backdrop" onClick={onCancel}>
       <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
@@ -12,7 +22,7 @@ export function ConfirmModal({ title, message, onConfirm, onCancel, confirmText 
 
         <div className="modal-content" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <p>{message}</p>
-          
+
           <div className="modal-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '16px' }}>
             <button type="button" className="secondary" onClick={onCancel}>{cancelText}</button>
             <button type="button" className={`primary ${danger ? 'danger' : ''}`} onClick={onConfirm} style={danger ? { backgroundColor: 'var(--danger)', color: 'white', borderColor: 'transparent' } : {}}>
