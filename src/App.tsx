@@ -61,7 +61,7 @@ function Welcome({ onEnter }: { onEnter: (session: Session) => void }) {
     <div className="lobby">
       <section className="lobby-brand">
         <div className="wordmark">
-          <span className="wordmark-glyph">{Icon.lock}</span>
+          <img src="/logo-mark.png" alt="" className="wordmark-logo" />
           sable
           <ThemeToggle className="lobby-theme" />
         </div>
@@ -162,7 +162,7 @@ function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, onShowPro
     <aside className="sidebar">
       <header className="sidebar-header">
         <div className="wordmark compact">
-          <span className="wordmark-glyph">{Icon.lock}</span>
+          <img src="/logo-mark.png" alt="" className="wordmark-logo" />
           sable
         </div>
         <div className="me">

@@ -152,14 +152,14 @@ button:focus-visible {
 
 .wordmark.compact { margin-bottom: 0; font-size: 1rem; }
 
-.wordmark-glyph {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-radius: 10px;
-  padding: 7px;
+.wordmark-logo {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 
-.wordmark-glyph svg { width: 18px; height: 18px; }
+.wordmark.compact .wordmark-logo { width: 22px; height: 22px; }
 
 .lobby-brand h1 {
   font-size: clamp(2.4rem, 5.2vw, 4.4rem);
@@ -2233,7 +2233,7 @@ video.media { width: min(320px, 62vw); }
 
 .contacts-filter-icon {
   position: absolute;
-  left: 20px;
+  left: 25px;
   top: 50%;
   transform: translateY(-50%);
   color: var(--muted);
