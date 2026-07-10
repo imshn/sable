@@ -5,6 +5,7 @@ import { store } from './db.js'
 import { vapidPublicKey } from './push.js'
 import { turnServers, metaTags, decodeEntities } from './helpers.js'
 import { broadcastAnnouncement } from './notify.js'
+import { registerAdmin } from './admin.js'
 
 const BOOT_ID = randomUUID().slice(0, 8)
 
@@ -12,6 +13,7 @@ export function createHttpApp(): Express {
   const app = express()
   app.use(cors({ origin: true }))
   app.use(express.json())
+  registerAdmin(app)
 
   app.get('/healthz', (_req, res) => {
     res.json({ ok: true, boot: BOOT_ID, up: Math.round(process.uptime()) })

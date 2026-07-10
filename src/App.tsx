@@ -10,6 +10,7 @@ import { ContactsPage } from './ContactsPage.tsx'
 import { ProfileSettingsModal } from './ProfileSettingsModal.tsx'
 import { ConfirmModal } from './ConfirmModal.tsx'
 import { InvitePage } from './InvitePage.tsx'
+import { AdminPage } from './AdminPage.tsx'
 import { avatarBg } from './avatarColor.ts'
 import type {
   Contact, Group, Convo, ConvoMessage, ChatTarget, QualitySample, MyProfile,
@@ -1229,6 +1230,10 @@ export default function App() {
     const username = localStorage.getItem('sable-username')
     return name && username ? { name, username } : null
   })
+
+  // Operator dashboard — deliberately outside the session gate so it never
+  // touches chat identity; the server 404s everything without the admin key.
+  if (window.location.pathname === '/admin') return <AdminPage />
 
   return (
     <>
