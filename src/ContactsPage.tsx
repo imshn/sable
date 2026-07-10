@@ -4,6 +4,7 @@ import type { Socket } from 'socket.io-client'
 import { Icon } from './icons.tsx'
 import { ConfirmModal } from './ConfirmModal.tsx'
 import { avatarBg } from './avatarColor.ts'
+import { usePending } from './usePending.ts'
 import type { Contact, SearchUser } from './types.ts'
 
 type ContactsTab = 'contacts' | 'requests' | 'search'
@@ -85,16 +86,73 @@ interface ContactsPageProps {
   onChat: (id: string) => void
   onVoiceCall: (id: string) => void
   onVideoCall: (id: string) => void
-  sendContactRequest: (id: string) => void
-  acceptContactRequest: (id: string) => void
-  rejectContactRequest: (id: string) => void
-  removeContact: (id: string) => void
-  blockContact: (id: string) => void
-  unblockContact: (id: string) => void
+  sendContactRequest: (id: string, onDone?: (ok: boolean) => void) => void
+  acceptContactRequest: (id: string, onDone?: (ok: boolean) => void) => void
+  rejectContactRequest: (id: string, onDone?: (ok: boolean) => void) => void
+  removeContact: (id: string, onDone?: (ok: boolean) => void) => void
+  blockContact: (id: string, onDone?: (ok: boolean) => void) => void
+  unblockContact: (id: string, onDone?: (ok: boolean) => void) => void
+  setContactNickname: (id: string, nickname: string, onDone?: (ok: boolean) => void) => void
   socketRef: RefObject<Socket | null>
 }
 
-export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoCall, sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, blockContact, unblockContact: _unblockContact, socketRef: _socketRef }: ContactsPageProps) {
+// Inline "private label" editor — only ever changes how this contact shows
+// up to me, never their real profile. Collapsed to a button until clicked.
+function NicknameEditor({ person, pending, onSave }: { person: Contact; pending: boolean; onSave: (nickname: string) => void }) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(person.nickname ?? '')
+
+  // Once the save round-trip lands, `person.nickname` (from fresh server
+  // state) catches up to what we submitted — that's the signal to collapse
+  // back to the button, rather than guessing with a timer.
+  useEffect(() => {
+    if (editing && !pending && (person.nickname ?? '') === value) setEditing(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, person.nickname])
+
+  if (!editing) {
+    return (
+      <button type="button" className="drawer-item" onClick={() => { setValue(person.nickname ?? ''); setEditing(true) }}>
+        <span className="drawer-glyph">{Icon.pen}</span>
+        {person.nickname ? 'Edit nickname' : 'Set a nickname'}
+      </button>
+    )
+  }
+
+  const submit = () => {
+    const trimmed = value.trim()
+    if (trimmed === (person.nickname ?? '')) { setEditing(false); return }
+    onSave(trimmed)
+  }
+
+  return (
+    <div className="nickname-editor">
+      <input
+        type="text"
+        value={value}
+        placeholder={person.realName}
+        maxLength={48}
+        autoFocus
+        disabled={pending}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') setEditing(false) }}
+      />
+      <button type="button" className="primary" style={{ width: 'auto', padding: '0 16px' }} onClick={submit} disabled={pending}>
+        {pending && <span className="btn-spinner" />}Save
+      </button>
+      <button type="button" className="secondary" style={{ width: 'auto', padding: '0 16px' }} onClick={() => setEditing(false)} disabled={pending}>
+        Cancel
+      </button>
+    </div>
+  )
+}
+
+export function ContactsPage({
+  clientId, contacts, onChat, onVoiceCall, onVideoCall,
+  sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, blockContact,
+  unblockContact: _unblockContact, setContactNickname, socketRef: _socketRef,
+}: ContactsPageProps) {
+  const { isPending, run } = usePending()
   const [activeTab, setActiveTab] = useState<ContactsTab>('contacts')
   const [filter, setFilter] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
@@ -320,6 +378,11 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
                 {Icon.video}<span className="call-btn-label">Video</span>
               </button>
             </div>
+            <NicknameEditor
+              person={person}
+              pending={isPending(`nickname:${person.id}`)}
+              onSave={(nickname) => run(`nickname:${person.id}`, (done) => setContactNickname(person.id, nickname, done))}
+            />
             <div className="profile-detail-danger">
               <button className="drawer-item danger" onClick={() => setUserToRemove(person)}>
                 <span className="drawer-glyph danger-glyph">{Icon.trash}</span> Remove Contact
@@ -335,8 +398,20 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
           <>
             <p className="profile-detail-note">Sent you a contact request.</p>
             <div className="profile-detail-buttons">
-              <button className="secondary" onClick={() => rejectContactRequest(person.id)}>Decline</button>
-              <button className="primary" onClick={() => acceptContactRequest(person.id)}>Accept</button>
+              <button
+                className="secondary"
+                disabled={isPending(`reject:${person.id}`) || isPending(`accept:${person.id}`)}
+                onClick={() => run(`reject:${person.id}`, (done) => rejectContactRequest(person.id, done))}
+              >
+                {isPending(`reject:${person.id}`) && <span className="btn-spinner" />}Decline
+              </button>
+              <button
+                className="primary"
+                disabled={isPending(`reject:${person.id}`) || isPending(`accept:${person.id}`)}
+                onClick={() => run(`accept:${person.id}`, (done) => acceptContactRequest(person.id, done))}
+              >
+                {isPending(`accept:${person.id}`) && <span className="btn-spinner" />}Accept
+              </button>
             </div>
           </>
         )}
@@ -345,7 +420,13 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
           <>
             <p className="profile-detail-note">Request pending.</p>
             <div className="profile-detail-buttons">
-              <button className="secondary" onClick={() => removeContact(person.id)}>Cancel Request</button>
+              <button
+                className="secondary"
+                disabled={isPending(`remove:${person.id}`)}
+                onClick={() => run(`remove:${person.id}`, (done) => removeContact(person.id, done))}
+              >
+                {isPending(`remove:${person.id}`) && <span className="btn-spinner" />}Cancel Request
+              </button>
             </div>
           </>
         )}
@@ -356,14 +437,32 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
               existingContact.status === 'accepted' ? (
                 <span className="session-badge" style={{ color: 'var(--muted)', borderColor: 'var(--border)' }}>Already contacts</span>
               ) : existingContact.status === 'pending' && existingContact.isRequester ? (
-                <button className="secondary" onClick={() => removeContact(person.id)}>Cancel Request</button>
+                <button
+                  className="secondary"
+                  disabled={isPending(`remove:${person.id}`)}
+                  onClick={() => run(`remove:${person.id}`, (done) => removeContact(person.id, done))}
+                >
+                  {isPending(`remove:${person.id}`) && <span className="btn-spinner" />}Cancel Request
+                </button>
               ) : existingContact.status === 'pending' ? (
-                <button className="primary" onClick={() => acceptContactRequest(person.id)}>Accept Request</button>
+                <button
+                  className="primary"
+                  disabled={isPending(`accept:${person.id}`)}
+                  onClick={() => run(`accept:${person.id}`, (done) => acceptContactRequest(person.id, done))}
+                >
+                  {isPending(`accept:${person.id}`) && <span className="btn-spinner" />}Accept Request
+                </button>
               ) : (
                 <span className="session-badge" style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}>Blocked</span>
               )
             ) : (
-              <button className="primary" onClick={() => sendContactRequest(person.id)}>Add Contact</button>
+              <button
+                className="primary"
+                disabled={isPending(`add:${person.id}`)}
+                onClick={() => run(`add:${person.id}`, (done) => sendContactRequest(person.id, done))}
+              >
+                {isPending(`add:${person.id}`) && <span className="btn-spinner" />}Add Contact
+              </button>
             )}
           </div>
         )}
@@ -398,11 +497,12 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
           message={`Are you sure you want to block ${userToBlock.name}? They won't be able to message or call you.`}
           confirmText="Block"
           danger={true}
-          onConfirm={() => {
-            blockContact(userToBlock.id)
+          pending={isPending(`block:${userToBlock.id}`)}
+          onConfirm={() => run(`block:${userToBlock.id}`, (done) => blockContact(userToBlock.id, () => {
+            done()
             setUserToBlock(null)
             setSelectedId(null)
-          }}
+          }))}
           onCancel={() => setUserToBlock(null)}
         />
       )}
@@ -413,11 +513,12 @@ export function ContactsPage({ clientId, contacts, onChat, onVoiceCall, onVideoC
           message={`Remove ${userToRemove.name} from your contacts? You can send a new request later if you change your mind.`}
           confirmText="Remove"
           danger={true}
-          onConfirm={() => {
-            removeContact(userToRemove.id)
+          pending={isPending(`remove:${userToRemove.id}`)}
+          onConfirm={() => run(`remove:${userToRemove.id}`, (done) => removeContact(userToRemove.id, () => {
+            done()
             setUserToRemove(null)
             setSelectedId(null)
-          }}
+          }))}
           onCancel={() => setUserToRemove(null)}
         />
       )}

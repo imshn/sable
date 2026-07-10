@@ -98,6 +98,25 @@ button {
   cursor: pointer;
 }
 
+button:disabled { opacity: 0.55; cursor: default; }
+
+.btn-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  opacity: 0.7;
+  animation: btn-spin 700ms linear infinite;
+  vertical-align: -2px;
+  margin-right: 6px;
+}
+
+@keyframes btn-spin {
+  to { transform: rotate(360deg); }
+}
+
 input, textarea {
   font: inherit;
   color: var(--text);
@@ -2336,6 +2355,16 @@ video.media { width: min(320px, 62vw); }
   border-top: 1px solid var(--border);
   width: 100%;
 }
+
+.nickname-editor {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  margin-top: 12px;
+}
+
+.nickname-editor input { min-height: 40px; padding: 8px 12px; }
 
 .contact-card-text {
   display: flex;

@@ -97,7 +97,7 @@ export function ReportModal({ targetName, targetId, socket, onClose }: ReportMod
             )}
 
             <div className="modal-actions">
-              <button type="button" className="secondary" onClick={onClose}>Cancel</button>
+              <button type="button" className="secondary" onClick={onClose} disabled={submitting}>Cancel</button>
               <button
                 type="button"
                 className="primary"
@@ -105,7 +105,7 @@ export function ReportModal({ targetName, targetId, socket, onClose }: ReportMod
                 disabled={!category || submitting}
                 onClick={submit}
               >
-                {submitting ? 'Submitting…' : 'Submit Report'}
+                {submitting && <span className="btn-spinner" />}{submitting ? 'Submitting…' : 'Submit Report'}
               </button>
             </div>
           </div>

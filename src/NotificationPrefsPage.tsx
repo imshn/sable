@@ -17,9 +17,10 @@ interface ToggleProps {
   description?: ReactNode
   value: boolean
   onChange: (value: boolean) => void
+  disabled?: boolean
 }
 
-function Toggle({ label, description, value, onChange }: ToggleProps) {
+function Toggle({ label, description, value, onChange, disabled }: ToggleProps) {
   return (
     <div className="notif-row">
       <div className="notif-row-label">
@@ -31,6 +32,7 @@ function Toggle({ label, description, value, onChange }: ToggleProps) {
         className={`toggle-switch ${value ? 'on' : ''}`}
         onClick={() => onChange(!value)}
         aria-pressed={value}
+        disabled={disabled}
       >
         <span className="toggle-thumb" />
       </button>
@@ -48,6 +50,7 @@ interface NotificationPrefsPageProps {
 export function NotificationPrefsPage({ socket, pushEnabled, onEnablePush, onDisablePush }: NotificationPrefsPageProps) {
   const [prefs, setPrefs] = useState<Prefs | null>(null)
   const [saved, setSaved] = useState(false)
+  const [savingPrefs, setSavingPrefs] = useState(false)
   const [pushBusy, setPushBusy] = useState(false)
   const [pushMsg, setPushMsg] = useState<string | null>(null)
   const pushUnsupported = typeof window !== 'undefined' && !('serviceWorker' in navigator && 'PushManager' in window)
@@ -80,9 +83,12 @@ export function NotificationPrefsPage({ socket, pushEnabled, onEnablePush, onDis
     if (!prefs) return
     const next = { ...prefs, [key]: val }
     setPrefs(next)
-    socket?.emit('save-notification-prefs', next)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 1500)
+    setSavingPrefs(true)
+    socket?.emit('save-notification-prefs', next, () => {
+      setSavingPrefs(false)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 1500)
+    })
   }
 
   if (!prefs) return <div className="settings-loading">Loading notification settings…</div>
@@ -110,7 +116,7 @@ export function NotificationPrefsPage({ socket, pushEnabled, onEnablePush, onDis
             disabled={pushBusy || pushBlocked}
             onClick={togglePush}
           >
-            {Icon.bell} {pushBusy ? 'Working…' : pushEnabled ? 'Disable on this device' : 'Enable on this device'}
+            {pushBusy ? <span className="btn-spinner" /> : Icon.bell} {pushBusy ? 'Working…' : pushEnabled ? 'Disable on this device' : 'Enable on this device'}
           </button>
         )}
       </div>
@@ -121,12 +127,12 @@ export function NotificationPrefsPage({ socket, pushEnabled, onEnablePush, onDis
           Notifications
         </div>
         <div className="privacy-rows">
-          <Toggle label="Messages" description="Get notified when you receive a new message" value={prefs.messages} onChange={v => update('messages', v)} />
-          <Toggle label="Calls" description="Get notified when you receive an incoming call" value={prefs.calls} onChange={v => update('calls', v)} />
-          <Toggle label="Contact Requests" description="Get notified when someone sends you a contact request" value={prefs.contact_requests} onChange={v => update('contact_requests', v)} />
-          <Toggle label="Mentions" description="Get notified when you are mentioned in a group" value={prefs.mentions} onChange={v => update('mentions', v)} />
-          <Toggle label="Group Activity" description="Get notified when members join, leave, or a group is deleted" value={prefs.group_activity} onChange={v => update('group_activity', v)} />
-          <Toggle label="Announcements" description="Updates from the Sable team" value={prefs.announcements} onChange={v => update('announcements', v)} />
+          <Toggle label="Messages" description="Get notified when you receive a new message" value={prefs.messages} onChange={v => update('messages', v)} disabled={savingPrefs} />
+          <Toggle label="Calls" description="Get notified when you receive an incoming call" value={prefs.calls} onChange={v => update('calls', v)} disabled={savingPrefs} />
+          <Toggle label="Contact Requests" description="Get notified when someone sends you a contact request" value={prefs.contact_requests} onChange={v => update('contact_requests', v)} disabled={savingPrefs} />
+          <Toggle label="Mentions" description="Get notified when you are mentioned in a group" value={prefs.mentions} onChange={v => update('mentions', v)} disabled={savingPrefs} />
+          <Toggle label="Group Activity" description="Get notified when members join, leave, or a group is deleted" value={prefs.group_activity} onChange={v => update('group_activity', v)} disabled={savingPrefs} />
+          <Toggle label="Announcements" description="Updates from the Sable team" value={prefs.announcements} onChange={v => update('announcements', v)} disabled={savingPrefs} />
         </div>
       </div>
 

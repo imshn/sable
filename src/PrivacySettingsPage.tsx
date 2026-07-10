@@ -17,9 +17,10 @@ interface PrivacyRowProps {
   description?: ReactNode
   value: PrivacyLevel
   onChange: (value: PrivacyLevel) => void
+  disabled?: boolean
 }
 
-function PrivacyRow({ label, description, value, onChange }: PrivacyRowProps) {
+function PrivacyRow({ label, description, value, onChange, disabled }: PrivacyRowProps) {
   return (
     <div className="privacy-row">
       <div className="privacy-row-label">
@@ -33,6 +34,7 @@ function PrivacyRow({ label, description, value, onChange }: PrivacyRowProps) {
             type="button"
             className={`privacy-opt-btn ${value === opt.value ? 'active' : ''}`}
             onClick={() => onChange(opt.value)}
+            disabled={disabled}
           >
             {value === opt.value && <span className="privacy-opt-check">{Icon.check}</span>}
             {opt.label}
@@ -46,6 +48,7 @@ function PrivacyRow({ label, description, value, onChange }: PrivacyRowProps) {
 export function PrivacySettingsPage({ socket }: { socket: Socket | null | undefined }) {
   const [settings, setSettings] = useState<PrivacySettings | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useEffect(() => {
@@ -62,10 +65,13 @@ export function PrivacySettingsPage({ socket }: { socket: Socket | null | undefi
     if (!settings) return
     const next = { ...settings, [key]: val }
     setSettings(next)
-    socket?.emit('save-privacy-settings', next)
-    setToast('Privacy setting updated')
-    clearTimeout(toastTimer.current)
-    toastTimer.current = setTimeout(() => setToast(null), 2000)
+    setSaving(true)
+    socket?.emit('save-privacy-settings', next, () => {
+      setSaving(false)
+      setToast('Privacy setting updated')
+      clearTimeout(toastTimer.current)
+      toastTimer.current = setTimeout(() => setToast(null), 2000)
+    })
   }
 
   if (!settings) {
@@ -85,12 +91,14 @@ export function PrivacySettingsPage({ socket }: { socket: Socket | null | undefi
             description="Controls who can send you direct messages"
             value={settings.message_privacy}
             onChange={v => update('message_privacy', v)}
+            disabled={saving}
           />
           <PrivacyRow
             label="Who can call me"
             description="Controls who can initiate voice or video calls"
             value={settings.call_privacy}
             onChange={v => update('call_privacy', v)}
+            disabled={saving}
           />
         </div>
       </div>
@@ -106,24 +114,28 @@ export function PrivacySettingsPage({ socket }: { socket: Socket | null | undefi
             description="Who can see when you were last active"
             value={settings.last_seen_privacy}
             onChange={v => update('last_seen_privacy', v)}
+            disabled={saving}
           />
           <PrivacyRow
             label="Online Status"
             description="Who can see when you're currently online"
             value={settings.online_privacy}
             onChange={v => update('online_privacy', v)}
+            disabled={saving}
           />
           <PrivacyRow
             label="Profile Picture"
             description="Who can see your profile photo"
             value={settings.avatar_privacy}
             onChange={v => update('avatar_privacy', v)}
+            disabled={saving}
           />
           <PrivacyRow
             label="Bio / About"
             description="Who can see your bio text"
             value={settings.bio_privacy}
             onChange={v => update('bio_privacy', v)}
+            disabled={saving}
           />
         </div>
       </div>

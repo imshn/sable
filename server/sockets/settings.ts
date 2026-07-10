@@ -105,11 +105,12 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
     cb(passkeySummary(await store.getPasskeysByUser(from)))
   })
 
-  socket.on('delete-passkey', async ({ credentialId }: { credentialId: string }) => {
+  socket.on('delete-passkey', async ({ credentialId }: { credentialId: string }, cb?: (ok: boolean) => void) => {
     const from = clientId()
-    if (!from || !credentialId) return
+    if (!from || !credentialId) { cb?.(false); return }
     await store.deletePasskey(credentialId, from)
     socket.emit('passkeys', passkeySummary(await store.getPasskeysByUser(from)))
+    cb?.(true)
   })
 
   // ---- delete chat (soft, per-side; see getDeletedConversations comment in db.ts) ----
@@ -120,26 +121,28 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
   })
 
   // ---- push subscriptions ----
-  socket.on('save-push-subscription', async ({ subscription }: { subscription: { endpoint: string; keys: { p256dh: string; auth: string } } }) => {
+  socket.on('save-push-subscription', async ({ subscription }: { subscription: { endpoint: string; keys: { p256dh: string; auth: string } } }, cb?: (ok: boolean) => void) => {
     const from = clientId()
-    if (!from || !subscription?.endpoint || !subscription.keys?.p256dh || !subscription.keys?.auth) return
+    if (!from || !subscription?.endpoint || !subscription.keys?.p256dh || !subscription.keys?.auth) { cb?.(false); return }
     store.savePushSubscription(randomUUID(), from, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth)
+    cb?.(true)
   })
 
-  socket.on('delete-push-subscription', async ({ endpoint }: { endpoint: string }) => {
-    if (!endpoint) return
+  socket.on('delete-push-subscription', async ({ endpoint }: { endpoint: string }, cb?: (ok: boolean) => void) => {
+    if (!endpoint) { cb?.(false); return }
     await store.deletePushSubscription(endpoint)
+    cb?.(true)
   })
 
   // ---- profile ----
-  socket.on('update-profile', async ({ name, username, bio, avatar }: { name?: string; username?: string; bio?: string; avatar?: string }) => {
+  socket.on('update-profile', async ({ name, username, bio, avatar }: { name?: string; username?: string; bio?: string; avatar?: string }, cb?: (ok: boolean) => void) => {
     const from = clientId()
-    if (!from) return
+    if (!from) { cb?.(false); return }
     let cleanUsername = username
     if (username) {
       cleanUsername = username.trim().toLowerCase().slice(0, 32)
       const isAvailable = await store.checkUsernameAvailable(cleanUsername, from)
-      if (!isAvailable) { socket.emit('profile-error', 'Username is already taken'); return }
+      if (!isAvailable) { socket.emit('profile-error', 'Username is already taken'); cb?.(false); return }
     }
     const cleanName = name ? name.trim().slice(0, 32) : online.get(from)?.name
     await store.updateProfile(from, { name: cleanName!, username: cleanUsername!, bio: bio ? bio.trim().slice(0, 160) : '', avatar: avatar! })
@@ -149,16 +152,18 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
       if (cleanUsername) onlineUser.username = cleanUsername
     }
     socket.emit('profile-updated', await store.getUser(from))
+    cb?.(true)
   })
 
   // ---- invitations ----
-  socket.on('create-invite', async (options: { expiresIn?: number } | undefined) => {
+  socket.on('create-invite', async (options: { expiresIn?: number } | undefined, cb?: (ok: boolean) => void) => {
     const from = clientId()
-    if (!from) return
+    if (!from) { cb?.(false); return }
     const code = randomUUID().split('-')[0]
     const expiresAt = options?.expiresIn ? Date.now() + options.expiresIn : null
     store.createInvite(randomUUID(), code, from, expiresAt)
     socket.emit('invite-created', { code, expiresAt })
+    cb?.(true)
   })
 
   socket.on('get-invite', async ({ code }: { code: string }, callback: (res: unknown) => void) => {
@@ -179,9 +184,9 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
     else socket.emit('privacy-settings', settings)
   })
 
-  socket.on('save-privacy-settings', async (settings: Record<string, string>) => {
+  socket.on('save-privacy-settings', async (settings: Record<string, string>, cb?: (ok: boolean) => void) => {
     const from = clientId()
-    if (!from) return
+    if (!from) { cb?.(false); return }
     const valid: PrivacyLevel[] = ['everyone', 'contacts', 'nobody']
     const isValid = (v: string): v is PrivacyLevel => (valid as string[]).includes(v)
     const cleaned = {
@@ -195,16 +200,18 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
     await store.savePrivacySettings(from, cleaned)
     privacyCache.set(from, { user_id: from, ...cleaned })
     socket.emit('privacy-settings', { user_id: from, ...cleaned })
+    cb?.(true)
   })
 
   // ---- reporting ----
-  socket.on('report-user', async ({ reportedId, category, details }: { reportedId: string; category: string; details?: string }) => {
+  socket.on('report-user', async ({ reportedId, category, details }: { reportedId: string; category: string; details?: string }, cb?: (ok: boolean) => void) => {
     const from = clientId()
-    if (!from || !reportedId || from === reportedId) return
+    if (!from || !reportedId || from === reportedId) { cb?.(false); return }
     const validCategories = ['spam', 'harassment', 'fake_account', 'inappropriate_content', 'scam', 'other']
-    if (!validCategories.includes(category)) return
+    if (!validCategories.includes(category)) { cb?.(false); return }
     store.createReport(randomUUID(), from, reportedId, category, details?.slice(0, 500) || null)
     socket.emit('report-sent', { ok: true })
+    cb?.(true)
   })
 
   // ---- notification preferences ----
@@ -216,9 +223,9 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
     else socket.emit('notification-prefs', prefs)
   })
 
-  socket.on('save-notification-prefs', async (prefs: Record<string, boolean>) => {
+  socket.on('save-notification-prefs', async (prefs: Record<string, boolean>, cb?: (ok: boolean) => void) => {
     const from = clientId()
-    if (!from) return
+    if (!from) { cb?.(false); return }
     await store.saveNotificationPrefs(from, {
       messages:         prefs.messages         !== false,
       calls:            prefs.calls            !== false,
@@ -228,6 +235,7 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
       announcements:    prefs.announcements    !== false,
     })
     socket.emit('notification-prefs', await store.getNotificationPrefs(from))
+    cb?.(true)
   })
 
   // ---- sessions ----
@@ -249,11 +257,11 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
     else socket.emit('login-history', history)
   })
 
-  socket.on('revoke-session', async ({ sessionId }: { sessionId: string }) => {
+  socket.on('revoke-session', async ({ sessionId }: { sessionId: string }, cb?: (ok: boolean) => void) => {
     const from = clientId()
-    if (!from || !sessionId) return
+    if (!from || !sessionId) { cb?.(false); return }
     // Can't revoke your own current session this way (use sign-out for that)
-    if (sessionId === socket.data.sessionId) return
+    if (sessionId === socket.data.sessionId) { cb?.(false); return }
     await store.revokeSession(sessionId, from)
     // Kick that socket if it's still connected
     for (const [, s] of io.sockets.sockets) {
@@ -263,11 +271,12 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
       }
     }
     socket.emit('sessions', (await store.getSessions(from)).map(s => ({ ...s, isCurrent: s.id === socket.data.sessionId })))
+    cb?.(true)
   })
 
-  socket.on('revoke-all-sessions', async () => {
+  socket.on('revoke-all-sessions', async (cb?: (ok: boolean) => void) => {
     const from = clientId()
-    if (!from) return
+    if (!from) { cb?.(false); return }
     await store.revokeAllSessionsExcept(from, socket.data.sessionId!)
     // Kick all other sockets for this user
     for (const [, s] of io.sockets.sockets) {
@@ -277,12 +286,13 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
       }
     }
     socket.emit('sessions', (await store.getSessions(from)).map(s => ({ ...s, isCurrent: s.id === socket.data.sessionId })))
+    cb?.(true)
   })
 
   // ---- account deletion ----
-  socket.on('delete-account', async () => {
+  socket.on('delete-account', async (cb?: (ok: boolean) => void) => {
     const from = clientId()
-    if (!from) return
+    if (!from) { cb?.(false); return }
     await store.deleteAccount(from)
     // Clean up in-memory presence
     online.delete(from)
@@ -296,6 +306,7 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
       if (peerSocket) io.to(peerSocket.socketId).emit('presence', { id: from, online: false, lastSeen: null })
     }
     socket.emit('account-deleted')
+    cb?.(true)
     socket.disconnect(true)
   })
 }

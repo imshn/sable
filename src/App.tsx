@@ -240,13 +240,14 @@ function Sidebar({ name, rows, convos, activeId, onSelect, onNewGroup, onShowPro
 
 interface NewGroupModalProps {
   contacts: Contact[]
-  onCreate: (name: string, memberIds: string[]) => void
+  onCreate: (name: string, memberIds: string[], onDone?: (ok: boolean) => void) => void
   onClose: () => void
 }
 
 function NewGroupModal({ contacts, onCreate, onClose }: NewGroupModalProps) {
   const [groupName, setGroupName] = useState('')
   const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [creating, setCreating] = useState(false)
 
   const toggle = (id: string) =>
     setPicked((prev) => {
@@ -290,10 +291,13 @@ function NewGroupModal({ contacts, onCreate, onClose }: NewGroupModalProps) {
         )}
         <button
           className="primary"
-          disabled={!groupName.trim() || picked.size === 0}
-          onClick={() => { onCreate(groupName.trim(), [...picked]); onClose() }}
+          disabled={!groupName.trim() || picked.size === 0 || creating}
+          onClick={() => {
+            setCreating(true)
+            onCreate(groupName.trim(), [...picked], (ok) => { if (ok) onClose(); else setCreating(false) })
+          }}
         >
-          Create group
+          {creating && <span className="btn-spinner" />}Create group
           <span className="btn-icon">{Icon.users}</span>
         </button>
       </div>
@@ -683,13 +687,14 @@ function CallOverlay({
 interface MemberPickerProps {
   title: string
   contacts: Contact[]
-  onPick: (ids: string[]) => void
+  onPick: (ids: string[], onDone?: (ok: boolean) => void) => void
   onClose: () => void
 }
 
 // generic online-contact picker (add members to a group)
 function MemberPicker({ title, contacts, onPick, onClose }: MemberPickerProps) {
   const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [adding, setAdding] = useState(false)
 
   const toggle = (id: string) =>
     setPicked((prev) => {
@@ -725,10 +730,13 @@ function MemberPicker({ title, contacts, onPick, onClose }: MemberPickerProps) {
         )}
         <button
           className="primary"
-          disabled={picked.size === 0}
-          onClick={() => { onPick([...picked]); onClose() }}
+          disabled={picked.size === 0 || adding}
+          onClick={() => {
+            setAdding(true)
+            onPick([...picked], (ok) => { if (ok) onClose(); else setAdding(false) })
+          }}
         >
-          Add to group
+          {adding && <span className="btn-spinner" />}Add to group
           <span className="btn-icon">{Icon.userPlus}</span>
         </button>
       </div>
@@ -821,6 +829,7 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
     send, react, deleteForAll, deleteForMe, addLocalEntry, deleteConversation,
     createGroup, deleteGroup, leaveGroup, inviteToGroup,
     sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, blockContact, unblockContact,
+    setContactNickname,
     retryWithPasskey, fetchPasskeys, deletePasskey, registerPasskey, enablePush, disablePush,
     notifyTyping, markRead, socketRef
   } = chat
@@ -1071,6 +1080,7 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
             removeContact={removeContact}
             blockContact={blockContact}
             unblockContact={unblockContact}
+            setContactNickname={setContactNickname}
             socketRef={socketRef}
           />
         ) : activeId ? (
@@ -1116,7 +1126,7 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
           contacts={contacts.filter(
             (c) => c.status === 'accepted' && !groups.find((g) => g.id === addingTo)?.members.some((m) => m.id === c.id)
           )}
-          onPick={(ids) => inviteToGroup(addingTo, ids)}
+          onPick={(ids, onDone) => inviteToGroup(addingTo, ids, onDone)}
           onClose={() => setAddingTo(null)}
         />
       )}

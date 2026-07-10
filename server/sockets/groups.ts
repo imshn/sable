@@ -9,21 +9,22 @@ import type { AppSocket, ConnectionCtx } from '../types.js'
 export function registerGroups(socket: AppSocket, ctx: ConnectionCtx): void {
   const { clientId, myPub } = ctx
 
-  socket.on('group-create', ({ name, members }: { name: string; members: string[] }) => {
+  socket.on('group-create', ({ name, members }: { name: string; members: string[] }, cb?: (ok: boolean) => void) => {
     const from = clientId()
-    if (!from || typeof name !== 'string' || !name.trim() || !Array.isArray(members)) return
+    if (!from || typeof name !== 'string' || !name.trim() || !Array.isArray(members)) { cb?.(false); return }
     const id = `g-${randomUUID()}`
     const all = new Set([from, ...members.filter((m) => known.has(m) || online.has(m))])
-    if (all.size < 2) return
+    if (all.size < 2) { cb?.(false); return }
     groups.set(id, { name: name.trim().slice(0, 48), owner: from, members: all })
     store.saveGroup(id, name.trim().slice(0, 48), from, [...all])
     emitToMembers(id, 'group-added', groupInfo(id))
+    cb?.(true)
   })
 
-  socket.on('group-delete', ({ groupId }: { groupId: string }) => {
+  socket.on('group-delete', ({ groupId }: { groupId: string }, cb?: (ok: boolean) => void) => {
     const g = groups.get(groupId)
     const from = clientId()
-    if (!g || g.owner !== from) return
+    if (!g || g.owner !== from) { cb?.(false); return }
     const by = online.get(from!)?.name
     emitToMembers(groupId, 'group-removed', { id: groupId, by })
     for (const m of g.members) {
@@ -32,12 +33,13 @@ export function registerGroups(socket: AppSocket, ctx: ConnectionCtx): void {
     }
     groups.delete(groupId)
     store.deleteGroup(groupId)
+    cb?.(true)
   })
 
-  socket.on('group-leave', ({ groupId }: { groupId: string }) => {
+  socket.on('group-leave', ({ groupId }: { groupId: string }, cb?: (ok: boolean) => void) => {
     const g = groups.get(groupId)
     const from = clientId()
-    if (!g || !from || !g.members.has(from)) return
+    if (!g || !from || !g.members.has(from)) { cb?.(false); return }
     const leaverName = online.get(from)?.name
     emitToMembers(groupId, 'group-left', { id: groupId, memberId: from, name: leaverName })
     g.members.delete(from)
@@ -53,14 +55,15 @@ export function registerGroups(socket: AppSocket, ctx: ConnectionCtx): void {
         notifyOffline(m, 'group_activity', { title: g.name, body: `${leaverName ?? 'Someone'} left the group`, tag: `group-${groupId}`, url: '/' })
       }
     }
+    cb?.(true)
   })
 
-  socket.on('group-invite', ({ groupId, members }: { groupId: string; members: string[] }) => {
+  socket.on('group-invite', ({ groupId, members }: { groupId: string; members: string[] }, cb?: (ok: boolean) => void) => {
     const g = groups.get(groupId)
     const from = clientId()
-    if (!g || !from || !g.members.has(from) || !Array.isArray(members)) return
+    if (!g || !from || !g.members.has(from) || !Array.isArray(members)) { cb?.(false); return }
     const added = members.filter((m) => (known.has(m) || online.has(m)) && !g.members.has(m))
-    if (!added.length) return
+    if (!added.length) { cb?.(false); return }
     added.forEach((m) => g.members.add(m))
     store.saveGroup(groupId, g.name, g.owner, [...g.members])
     const names = added.map((m) => online.get(m)?.name ?? known.get(m)?.name).join(', ')
@@ -74,6 +77,7 @@ export function registerGroups(socket: AppSocket, ctx: ConnectionCtx): void {
       if (u) io.to(u.socketId).emit('group-joined', { id: groupId, names })
       else notifyOffline(m, 'group_activity', { title: g.name, body: `${names} joined the group`, tag: `group-${groupId}`, url: '/' })
     }
+    cb?.(true)
   })
 
   // mentions travels as plaintext member-id list alongside the (still

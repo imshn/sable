@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import type { Socket } from 'socket.io-client'
 import { Icon } from './icons.tsx'
+import { usePending } from './usePending.ts'
 import type { SessionRow, LoginHistoryRow, Passkey, PasskeyActionResult } from './types.ts'
 
 const RELATIVE = (ts: number | null | undefined) => {
@@ -18,7 +19,7 @@ interface SecurityPageProps {
   socket: Socket | null | undefined
   passkeys: Passkey[] | null
   onFetchPasskeys?: () => void
-  onDeletePasskey?: (credentialId: string) => void
+  onDeletePasskey?: (credentialId: string, onDone?: (ok: boolean) => void) => void
   onRegisterPasskey?: () => Promise<PasskeyActionResult>
 }
 
@@ -26,9 +27,11 @@ export function SecurityPage({ socket, passkeys, onFetchPasskeys, onDeletePasske
   const [sessions, setSessions] = useState<SessionRow[] | null>(null)
   const [history, setHistory] = useState<LoginHistoryRow[] | null>(null)
   const [revoking, setRevoking] = useState<string | null>(null)
+  const [revokingAll, setRevokingAll] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
   const [addingPasskey, setAddingPasskey] = useState(false)
   const [passkeyMsg, setPasskeyMsg] = useState<{ text: string; error?: boolean } | null>(null)
+  const { isPending, run } = usePending()
 
   useEffect(() => {
     if (!socket) return
@@ -58,13 +61,15 @@ export function SecurityPage({ socket, passkeys, onFetchPasskeys, onDeletePasske
 
   const revoke = (sessionId: string) => {
     setRevoking(sessionId)
-    socket?.emit('revoke-session', { sessionId })
-    setTimeout(() => setRevoking(null), 1000)
+    socket?.emit('revoke-session', { sessionId }, () => setRevoking(null))
   }
 
   const revokeAll = () => {
-    socket?.emit('revoke-all-sessions')
-    setConfirmed(false)
+    setRevokingAll(true)
+    socket?.emit('revoke-all-sessions', () => {
+      setRevokingAll(false)
+      setConfirmed(false)
+    })
   }
 
   const current = sessions?.find(s => s.isCurrent)
@@ -103,9 +108,10 @@ export function SecurityPage({ socket, passkeys, onFetchPasskeys, onDeletePasske
                   type="button"
                   className="secondary danger-btn"
                   style={{ flexShrink: 0, padding: '6px 14px', fontSize: '0.8rem' }}
-                  onClick={() => onDeletePasskey?.(pk.credentialId)}
+                  disabled={isPending(`passkey:${pk.credentialId}`)}
+                  onClick={() => run(`passkey:${pk.credentialId}`, (done) => onDeletePasskey?.(pk.credentialId, done))}
                 >
-                  Remove
+                  {isPending(`passkey:${pk.credentialId}`) && <span className="btn-spinner" />}Remove
                 </button>
               </div>
             ))}
@@ -125,7 +131,7 @@ export function SecurityPage({ socket, passkeys, onFetchPasskeys, onDeletePasske
           disabled={addingPasskey}
           onClick={addPasskey}
         >
-          {Icon.key} {addingPasskey ? 'Follow your browser\'s prompt…' : 'Add a passkey'}
+          {addingPasskey ? <span className="btn-spinner" /> : Icon.key} {addingPasskey ? 'Follow your browser\'s prompt…' : 'Add a passkey'}
         </button>
       </div>
 
@@ -179,7 +185,7 @@ export function SecurityPage({ socket, passkeys, onFetchPasskeys, onDeletePasske
                   onClick={() => revoke(s.id)}
                   style={{ flexShrink: 0, padding: '6px 14px', fontSize: '0.8rem' }}
                 >
-                  {revoking === s.id ? 'Signing out…' : 'Sign out'}
+                  {revoking === s.id && <span className="btn-spinner" />}{revoking === s.id ? 'Signing out…' : 'Sign out'}
                 </button>
               </div>
             ))}
@@ -191,8 +197,10 @@ export function SecurityPage({ socket, passkeys, onFetchPasskeys, onDeletePasske
             ) : (
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8 }}>
                 <span style={{ fontSize: '0.9rem', color: 'var(--muted)' }}>Are you sure?</span>
-                <button type="button" className="primary danger-btn" style={{ width: 'auto', padding: '8px 18px' }} onClick={revokeAll}>Confirm</button>
-                <button type="button" className="secondary" style={{ width: 'auto', padding: '8px 14px' }} onClick={() => setConfirmed(false)}>Cancel</button>
+                <button type="button" className="primary danger-btn" style={{ width: 'auto', padding: '8px 18px' }} disabled={revokingAll} onClick={revokeAll}>
+                  {revokingAll && <span className="btn-spinner" />}Confirm
+                </button>
+                <button type="button" className="secondary" style={{ width: 'auto', padding: '8px 14px' }} disabled={revokingAll} onClick={() => setConfirmed(false)}>Cancel</button>
               </div>
             )}
           </div>

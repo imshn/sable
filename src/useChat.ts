@@ -55,6 +55,7 @@ interface ContactRow {
   recipient_last_seen?: number | null
   requester_last_seen?: number | null
   online?: boolean
+  nickname?: string | null
 }
 
 interface BacklogRow {
@@ -214,9 +215,12 @@ export function useChat(name: string, username: string) {
       const parseContacts = (list: ContactRow[]): Contact[] => {
         return list.map(c => {
           const isRequester = c.requester_id === clientId
+          const realName = isRequester ? c.recipient_name : c.requester_name
           return {
             id: isRequester ? c.recipient_id : c.requester_id,
-            name: isRequester ? c.recipient_name : c.requester_name,
+            name: c.nickname?.trim() || realName,
+            realName,
+            nickname: c.nickname ?? null,
             username: isRequester ? c.recipient_username : c.requester_username,
             avatar: isRequester ? c.recipient_avatar : c.requester_avatar,
             pubKey: JSON.parse(isRequester ? c.recipient_pubkey : c.requester_pubkey),
@@ -466,8 +470,8 @@ export function useChat(name: string, username: string) {
     addEntry(target, { id: crypto.randomUUID(), kind, body, ts: Date.now() }, false)
   }, [])
 
-  const createGroup = useCallback((groupName: string, memberIds: string[]) => {
-    socketRef.current?.emit('group-create', { name: groupName, members: memberIds })
+  const createGroup = useCallback((groupName: string, memberIds: string[], onDone?: (ok: boolean) => void) => {
+    socketRef.current?.emit('group-create', { name: groupName, members: memberIds }, onDone)
   }, [])
 
   const deleteGroup = useCallback((groupId: string) => {
@@ -480,8 +484,8 @@ export function useChat(name: string, username: string) {
     setGroups((gs) => gs.filter((g) => g.id !== groupId))
   }, [])
 
-  const inviteToGroup = useCallback((groupId: string, memberIds: string[]) => {
-    socketRef.current?.emit('group-invite', { groupId, members: memberIds })
+  const inviteToGroup = useCallback((groupId: string, memberIds: string[], onDone?: (ok: boolean) => void) => {
+    socketRef.current?.emit('group-invite', { groupId, members: memberIds }, onDone)
   }, [])
 
   const lastTypingSent = useRef(0)
@@ -497,28 +501,32 @@ export function useChat(name: string, username: string) {
     setConvos((c) => (c[target]?.unread ? { ...c, [target]: { ...c[target], unread: 0 } } : c))
   }, [])
 
-  const sendContactRequest = useCallback((to: string) => {
-    socketRef.current?.emit('contact-request', { to })
+  const sendContactRequest = useCallback((to: string, onDone?: (ok: boolean) => void) => {
+    socketRef.current?.emit('contact-request', { to }, onDone)
   }, [])
 
-  const acceptContactRequest = useCallback((to: string) => {
-    socketRef.current?.emit('contact-accept', { to })
+  const acceptContactRequest = useCallback((to: string, onDone?: (ok: boolean) => void) => {
+    socketRef.current?.emit('contact-accept', { to }, onDone)
   }, [])
 
-  const rejectContactRequest = useCallback((to: string) => {
-    socketRef.current?.emit('contact-reject', { to })
+  const rejectContactRequest = useCallback((to: string, onDone?: (ok: boolean) => void) => {
+    socketRef.current?.emit('contact-reject', { to }, onDone)
   }, [])
 
-  const removeContact = useCallback((to: string) => {
-    socketRef.current?.emit('contact-remove', { to })
+  const removeContact = useCallback((to: string, onDone?: (ok: boolean) => void) => {
+    socketRef.current?.emit('contact-remove', { to }, onDone)
   }, [])
 
-  const blockContact = useCallback((to: string) => {
-    socketRef.current?.emit('contact-block', { to })
+  const blockContact = useCallback((to: string, onDone?: (ok: boolean) => void) => {
+    socketRef.current?.emit('contact-block', { to }, onDone)
   }, [])
 
-  const unblockContact = useCallback((to: string) => {
-    socketRef.current?.emit('contact-unblock', { to })
+  const unblockContact = useCallback((to: string, onDone?: (ok: boolean) => void) => {
+    socketRef.current?.emit('contact-unblock', { to }, onDone)
+  }, [])
+
+  const setContactNickname = useCallback((to: string, nickname: string, onDone?: (ok: boolean) => void) => {
+    socketRef.current?.emit('set-contact-nickname', { to, nickname }, onDone)
   }, [])
 
   // Deletes my side of a conversation's history. The peer relationship and
@@ -577,8 +585,8 @@ export function useChat(name: string, username: string) {
     socketRef.current?.emit('get-passkeys', null, (rows: Passkey[]) => setPasskeys(rows))
   }, [])
 
-  const deletePasskey = useCallback((credentialId: string) => {
-    socketRef.current?.emit('delete-passkey', { credentialId })
+  const deletePasskey = useCallback((credentialId: string, onDone?: (ok: boolean) => void) => {
+    socketRef.current?.emit('delete-passkey', { credentialId }, onDone)
   }, [])
 
   // Registers a new passkey for the *currently logged-in* identity. After
@@ -608,6 +616,7 @@ export function useChat(name: string, username: string) {
     send, react, deleteForAll, deleteForMe, addLocalEntry, deleteConversation,
     createGroup, deleteGroup, leaveGroup, inviteToGroup,
     sendContactRequest, acceptContactRequest, rejectContactRequest, removeContact, blockContact, unblockContact,
+    setContactNickname,
     retryWithPasskey, fetchPasskeys, deletePasskey, registerPasskey, enablePush, disablePush,
     notifyTyping, markRead, socketRef,
   }

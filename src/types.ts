@@ -25,6 +25,11 @@ export interface Contact {
   isRequester: boolean
   lastSeen?: number | null
   online?: boolean
+  // Private label only I see — set via setContactNickname. When present,
+  // `name` above is already this value; `realName` is their actual name,
+  // kept around only so the nickname editor has something to prefill from.
+  nickname?: string | null
+  realName: string
 }
 
 export interface SearchUser {

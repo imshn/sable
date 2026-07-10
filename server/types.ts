@@ -94,6 +94,7 @@ export interface ContactRow {
 
 export interface ContactWithPresence extends ContactRow {
   online: boolean
+  nickname?: string | null
 }
 
 export interface InviteRow {

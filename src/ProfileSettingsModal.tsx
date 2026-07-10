@@ -4,6 +4,7 @@ import { Icon } from './icons.tsx'
 import { PrivacySettingsPage } from './PrivacySettingsPage.tsx'
 import { NotificationPrefsPage } from './NotificationPrefsPage.tsx'
 import { SecurityPage } from './SecurityPage.tsx'
+import { usePending } from './usePending.ts'
 import type { Contact, MyProfile, Passkey, PasskeyActionResult } from './types.ts'
 
 const TABS = [
@@ -27,12 +28,12 @@ interface ProfileSettingsModalProps {
   onUpdateProfile: (update: ProfileUpdate) => void
   socket: Socket
   blockedContacts?: Contact[]
-  unblockContact: (id: string) => void
+  unblockContact: (id: string, onDone?: (ok: boolean) => void) => void
   onShowInvite?: () => void
   onSignOut?: () => void
   passkeys: Passkey[] | null
   onFetchPasskeys?: () => void
-  onDeletePasskey?: (credentialId: string) => void
+  onDeletePasskey?: (credentialId: string, onDone?: (ok: boolean) => void) => void
   onRegisterPasskey?: () => Promise<PasskeyActionResult>
   pushEnabled: boolean
   onEnablePush?: () => Promise<boolean>
@@ -52,6 +53,8 @@ export function ProfileSettingsModal({
   const [error, setError] = useState('')
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleteInput, setDeleteInput] = useState('')
+  const [isDeleting, setIsDeleting] = useState(false)
+  const { isPending, run } = usePending()
 
   useEffect(() => {
     const handleProfileUpdated = (updatedUser: MyProfile) => { setIsSaving(false); onClose(updatedUser) }
@@ -74,7 +77,8 @@ export function ProfileSettingsModal({
 
   const handleDeleteAccount = () => {
     if (deleteInput !== username && deleteInput !== name) return
-    socket?.emit('delete-account')
+    setIsDeleting(true)
+    socket?.emit('delete-account', (ok: boolean) => { if (!ok) setIsDeleting(false) })
   }
 
   const tabTitle = TABS.find(t => t.id === activeTab)?.label
@@ -156,7 +160,7 @@ export function ProfileSettingsModal({
 
                 <div className="modal-actions" style={{ display: 'flex', justifyContent: 'flex-start', gap: 12, marginTop: 0 }}>
                   <button type="submit" className="primary" disabled={isSaving}>
-                    {isSaving ? 'Saving…' : 'Save Profile'}
+                    {isSaving && <span className="btn-spinner" />}{isSaving ? 'Saving…' : 'Save Profile'}
                   </button>
                 </div>
 
@@ -175,7 +179,14 @@ export function ProfileSettingsModal({
                             </div>
                           </div>
                           <div className="contact-card-actions">
-                            <button type="button" className="secondary" onClick={() => unblockContact(c.id)}>Unblock</button>
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={isPending(`unblock:${c.id}`)}
+                              onClick={() => run(`unblock:${c.id}`, (done) => unblockContact(c.id, done))}
+                            >
+                              {isPending(`unblock:${c.id}`) && <span className="btn-spinner" />}Unblock
+                            </button>
                           </div>
                         </li>
                       ))}
@@ -281,12 +292,12 @@ export function ProfileSettingsModal({
                           type="button"
                           className="primary"
                           style={{ width: 'auto', padding: '8px 18px', backgroundColor: 'var(--danger)' }}
-                          disabled={deleteInput !== username && deleteInput !== name && deleteInput !== `@${username}`}
+                          disabled={isDeleting || (deleteInput !== username && deleteInput !== name && deleteInput !== `@${username}`)}
                           onClick={handleDeleteAccount}
                         >
-                          Permanently Delete
+                          {isDeleting && <span className="btn-spinner" />}Permanently Delete
                         </button>
-                        <button type="button" className="secondary" style={{ width: 'auto', padding: '8px 14px' }} onClick={() => { setShowDeleteConfirm(false); setDeleteInput('') }}>
+                        <button type="button" className="secondary" disabled={isDeleting} style={{ width: 'auto', padding: '8px 14px' }} onClick={() => { setShowDeleteConfirm(false); setDeleteInput('') }}>
                           Cancel
                         </button>
                       </div>

@@ -56,6 +56,14 @@ export async function migrate(): Promise<void> {
       PRIMARY KEY (requester_id, recipient_id)
     )`,
     `CREATE INDEX IF NOT EXISTS idx_contacts_status ON contacts(status)`,
+    // Private per-owner display name for a contact — never visible to the
+    // contact themselves or anyone else, only the person who set it.
+    `CREATE TABLE IF NOT EXISTS contact_nicknames (
+      owner_id TEXT NOT NULL,
+      contact_id TEXT NOT NULL,
+      nickname TEXT NOT NULL,
+      PRIMARY KEY (owner_id, contact_id)
+    )`,
     `CREATE TABLE IF NOT EXISTS invitations (
       id TEXT PRIMARY KEY,
       code TEXT NOT NULL UNIQUE,
@@ -246,6 +254,7 @@ export const store = {
     })
     // Remove contacts and invitations
     await db.execute({ sql: `DELETE FROM contacts WHERE requester_id=? OR recipient_id=?`, args: [userId, userId] })
+    await db.execute({ sql: `DELETE FROM contact_nicknames WHERE owner_id=? OR contact_id=?`, args: [userId, userId] })
     await db.execute({ sql: `DELETE FROM invitations WHERE creator_id=?`, args: [userId] })
     await db.execute({ sql: `DELETE FROM privacy_settings WHERE user_id=?`, args: [userId] })
     await db.execute({ sql: `DELETE FROM notification_preferences WHERE user_id=?`, args: [userId] })
@@ -281,6 +290,24 @@ export const store = {
       sql: `DELETE FROM contacts WHERE (requester_id = ? AND recipient_id = ?) OR (requester_id = ? AND recipient_id = ?)`,
       args: [requesterId, recipientId, recipientId, requesterId]
     })),
+
+  // ---- Contact nicknames (private per-owner) ----
+  setContactNickname: (ownerId: string, contactId: string, nickname: string) =>
+    db && safe(nickname
+      ? db.execute({
+          sql: `INSERT INTO contact_nicknames (owner_id, contact_id, nickname) VALUES (?, ?, ?)
+                ON CONFLICT(owner_id, contact_id) DO UPDATE SET nickname=excluded.nickname`,
+          args: [ownerId, contactId, nickname],
+        })
+      : db.execute({ sql: `DELETE FROM contact_nicknames WHERE owner_id = ? AND contact_id = ?`, args: [ownerId, contactId] })),
+
+  getContactNicknames: async (ownerId: string): Promise<Record<string, string>> => {
+    if (!db) return {}
+    const r = await db.execute({ sql: `SELECT contact_id, nickname FROM contact_nicknames WHERE owner_id = ?`, args: [ownerId] })
+    const map: Record<string, string> = {}
+    for (const row of r.rows) map[row.contact_id as string] = row.nickname as string
+    return map
+  },
 
   // ---- Invitations ----
   createInvite: (id: string, code: string, creatorId: string, expiresAt: number | null) =>

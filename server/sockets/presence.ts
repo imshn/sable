@@ -16,10 +16,10 @@ export function registerPresence(socket: AppSocket): ConnectionCtx {
   const deviceHint = parseDeviceHint(ua)
 
   const getContactsWithPresence = async (userId: string): Promise<ContactWithPresence[]> => {
-    const contacts = await store.getContacts(userId)
+    const [contacts, nicknames] = await Promise.all([store.getContacts(userId), store.getContactNicknames(userId)])
     return contacts.map(c => {
       const peerId = c.requester_id === userId ? c.recipient_id : c.requester_id
-      return { ...c, online: online.has(peerId) }
+      return { ...c, online: online.has(peerId), nickname: nicknames[peerId] ?? null }
     })
   }
 
