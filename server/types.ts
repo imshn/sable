@@ -9,6 +9,10 @@ export interface OnlineUser {
   username?: string
   pubKey: object
   sessionId: string
+  // Which conversation (peerId or groupId) this connection currently has
+  // open, so `dm`/`gdm` can still push a notification for a message that
+  // arrives while online but not actually being looked at right now.
+  activeThread?: string | null
 }
 
 export interface KnownUser {

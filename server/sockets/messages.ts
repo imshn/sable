@@ -2,7 +2,7 @@ import { io } from '../io.js'
 import { store } from '../db.js'
 import { online, known, privacyCache } from '../state.js'
 import { privacyAllows } from '../helpers.js'
-import { notifyOffline } from '../notify.js'
+import { notifyIfNotViewing } from '../notify.js'
 import type { AppSocket, ConnectionCtx } from '../types.js'
 
 interface EncryptedPayloadArg {
@@ -28,13 +28,12 @@ export function registerMessages(socket: AppSocket, ctx: ConnectionCtx): void {
     const wasRouted = !!recipient
     if (recipient) {
       io.to(recipient.socketId).emit('dm', { from, fromName: online.get(from)?.name, id, payload, ts })
-    } else {
-      notifyOffline(to, 'messages', {
-        title: online.get(from)?.name ?? 'New message',
-        body: 'Sent you a message',
-        tag: `dm-${from}`, url: '/',
-      })
     }
+    notifyIfNotViewing(to, from, 'messages', {
+      title: online.get(from)?.name ?? 'New message',
+      body: 'Sent you a message',
+      tag: `dm-${from}`, url: '/',
+    })
     if (known.has(to) || wasRouted) {
       store.saveMessage(id, to, from, myPub(), null, JSON.stringify(payload), ts, false)
     }

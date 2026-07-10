@@ -3,7 +3,7 @@ import { io } from '../io.js'
 import { store } from '../db.js'
 import { online, known, groups } from '../state.js'
 import { groupInfo, emitToMembers } from '../helpers.js'
-import { notifyOffline } from '../notify.js'
+import { notifyOffline, notifyIfNotViewing } from '../notify.js'
 import type { AppSocket, ConnectionCtx } from '../types.js'
 
 export function registerGroups(socket: AppSocket, ctx: ConnectionCtx): void {
@@ -96,14 +96,14 @@ export function registerGroups(socket: AppSocket, ctx: ConnectionCtx): void {
       }
       const u = online.get(memberId)
       if (u) io.to(u.socketId).emit('gdm', { groupId, from, fromName: online.get(from)?.name, id, payload, ts })
-      else if (mentioned.has(memberId)) {
-        notifyOffline(memberId, 'mentions', {
+      if (mentioned.has(memberId)) {
+        notifyIfNotViewing(memberId, groupId, 'mentions', {
           title: g.name,
           body: `${online.get(from)?.name ?? 'Someone'} mentioned you`,
           tag: `mention-${groupId}`, url: '/',
         })
       } else {
-        notifyOffline(memberId, 'messages', {
+        notifyIfNotViewing(memberId, groupId, 'messages', {
           title: g.name,
           body: `${online.get(from)?.name ?? 'Someone'} sent a message`,
           tag: `group-${groupId}`, url: '/',

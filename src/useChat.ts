@@ -82,10 +82,6 @@ export function useChat(name: string, username: string, activeId: string | null 
   const [passkeyError, setPasskeyError] = useState<string | null>(null)
   const [passkeys, setPasskeys] = useState<Passkey[] | null>(null)
   const [pushEnabled, setPushEnabled] = useState(false)
-  const pushEnabledRef = useRef(pushEnabled)
-  pushEnabledRef.current = pushEnabled
-  const activeIdRef = useRef(activeId)
-  activeIdRef.current = activeId
   const [announcement, setAnnouncement] = useState<Announcement | null>(null)
 
   const socketRef = useRef<Socket | null>(null)
@@ -394,18 +390,6 @@ export function useChat(name: string, username: string, activeId: string | null 
           : { id: msgId, kind: 'error', body: { text: `A message from ${fromName} could not be decrypted` }, ts }
         if (!group && env) socket.emit('delivered', { to: from, msgId })
         addEntry(key, entry, true)
-
-        // Push only fires server-side when there's no live socket at all —
-        // but an open tab holds one regardless of whether it's backgrounded
-        // or just sitting on a different conversation, so it would otherwise
-        // stay completely silent either way. Mirror the same "new message"
-        // notification locally whenever this isn't the conversation being
-        // looked at right now and push is opted into.
-        if (env && (document.hidden || activeIdRef.current !== key) && pushEnabledRef.current) {
-          navigator.serviceWorker?.ready.then((reg) => {
-            reg.showNotification(fromName || 'Sable', { body: 'Sent you a message', icon: '/icon-192.png', tag: `live-${group ? 'g' : 'd'}m-${key}` })
-          }).catch(() => {})
-        }
       }
 
       socket.on('dm', ({ from, fromName, id: msgId, payload, ts }: { from: string; fromName?: string; id: string; payload: EncryptedPayload; ts: number }) =>
@@ -437,6 +421,14 @@ export function useChat(name: string, username: string, activeId: string | null 
       socket.disconnect()
     }
   }, [name]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Tells the server which thread (if any) is currently open, so it can
+  // still push a notification for a message on some *other* conversation
+  // even while this socket is live — re-asserted on reconnect too, since
+  // the server's copy of this is only ever in memory.
+  useEffect(() => {
+    if (connected) socketRef.current?.emit('set-active-thread', { id: activeId })
+  }, [activeId, connected])
 
   const sealWith = async (keyPromise: Promise<CryptoKey> | null | undefined, env: OutgoingEnvelope): Promise<EncryptedPayload | null> => {
     if (!keyPromise) return null

@@ -34,12 +34,7 @@ export const notifyPresence = async (userId: string, onlineState: boolean, lastS
   }
 }
 
-// Buzzes a device when the app itself can't: zero live sockets for this
-// user, so no in-app UI is around to show anything. Payload is metadata
-// only (sender name, never message text) — the server still can't read
-// message content, so it can't put it in a push either.
-export async function notifyOffline(userId: string, prefKey: keyof NotificationPrefsRow, payload: PushPayload): Promise<void> {
-  if (online.has(userId)) return
+async function pushToSubscriptions(userId: string, prefKey: keyof NotificationPrefsRow, payload: PushPayload): Promise<void> {
   const prefs = await store.getNotificationPrefs(userId)
   if (prefs && prefs[prefKey] === 0) return
   const subs = await store.getPushSubscriptions(userId)
@@ -47,6 +42,25 @@ export async function notifyOffline(userId: string, prefKey: keyof NotificationP
     const result = await sendPush(sub, payload)
     if (result.expired) store.deletePushSubscription(sub.endpoint)
   }
+}
+
+// Buzzes a device when the app itself can't: zero live sockets for this
+// user, so no in-app UI is around to show anything. Payload is metadata
+// only (sender name, never message text) — the server still can't read
+// message content, so it can't put it in a push either.
+export async function notifyOffline(userId: string, prefKey: keyof NotificationPrefsRow, payload: PushPayload): Promise<void> {
+  if (online.has(userId)) return
+  await pushToSubscriptions(userId, prefKey, payload)
+}
+
+// For dm/gdm: a live socket isn't the same as looking at this conversation
+// — a message that lands on a thread the recipient doesn't currently have
+// open still deserves a push, same as if they were offline. `threadKey` is
+// the peerId (dm) or groupId (gdm) the message belongs to.
+export async function notifyIfNotViewing(userId: string, threadKey: string, prefKey: keyof NotificationPrefsRow, payload: PushPayload): Promise<void> {
+  const user = online.get(userId)
+  if (user && user.activeThread === threadKey) return
+  await pushToSubscriptions(userId, prefKey, payload)
 }
 
 // ponytail: allUsers() caps at 200 most-recently-active — fine for this

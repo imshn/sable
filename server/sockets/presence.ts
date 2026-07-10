@@ -117,6 +117,15 @@ export function registerPresence(socket: AppSocket): ConnectionCtx {
     await establishSession({ id, cleanName, cleanUsername, pubKey })
   })
 
+  // Lets dm/gdm tell a push apart from "they're already looking at this" —
+  // set whenever the client opens/closes a thread, including to null.
+  socket.on('set-active-thread', ({ id }: { id: string | null }) => {
+    const clientId = socket.data.clientId
+    if (!clientId) return
+    const me = online.get(clientId)
+    if (me) me.activeThread = id ?? null
+  })
+
   // ---- disconnect ----
   socket.on('disconnect', () => {
     const id = socket.data.clientId
