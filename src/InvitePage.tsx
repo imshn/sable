@@ -10,21 +10,27 @@ interface Invite {
 interface InvitePageProps {
   code: string
   socketRef: RefObject<Socket | null>
+  connected: boolean
   onJoin: (creatorId: string) => void
   onCancel: () => void
 }
 
-export function InvitePage({ code, socketRef, onJoin, onCancel }: InvitePageProps) {
+export function InvitePage({ code, socketRef, connected, onJoin, onCancel }: InvitePageProps) {
   const [invite, setInvite] = useState<Invite | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!socketRef.current) return
+    // `socketRef` is a ref, so its identity never changes — `connected` is
+    // what actually re-fires this once the socket exists and has connected;
+    // without it, a page load that beats the socket's connect races forever
+    // ("Loading invite..." never resolves, since a ref's .current changing
+    // isn't a React dependency change).
+    if (!connected || !socketRef.current) return
     socketRef.current.emit('get-invite', { code }, (response: { error?: string; invite?: Invite }) => {
       if (response.error) setError(response.error)
       else setInvite(response.invite ?? null)
     })
-  }, [code, socketRef])
+  }, [code, connected, socketRef])
 
   if (error) {
     return (

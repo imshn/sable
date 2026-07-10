@@ -817,6 +817,7 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
   const [showInviteModal, setShowInviteModal] = useState(false)
   const [addingTo, setAddingTo] = useState<string | null>(null)
   const [forwarding, setForwarding] = useState<ConvoMessage | null>(null)
+  const [retryingPasskey, setRetryingPasskey] = useState(false)
   const [inviteCode, setInviteCode] = useState<string | null>(() => {
     const path = window.location.pathname
     if (path.startsWith('/invite/')) return path.split('/')[2]
@@ -839,7 +840,10 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
     const [copied, setCopied] = useState(false)
 
     useEffect(() => {
-      if (!socketRef.current) return
+      // see InvitePage's identical fix: a ref's .current changing isn't a
+      // React dependency, so `connected` (not socketRef) is what re-fires
+      // this once the socket is actually up.
+      if (!connected || !socketRef.current) return
 
       const onInviteCreated = ({ code }: { code: string }) => {
         const baseUrl = window.location.origin
@@ -852,7 +856,7 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
       return () => {
         socketRef.current?.off('invite-created', onInviteCreated)
       }
-    }, [socketRef])
+    }, [socketRef, connected])
 
     const copyToClipboard = () => {
       if (!inviteLink) return
@@ -980,7 +984,12 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
     return (
       <div className="lobby">
         <section className="lobby-panel" style={{ margin: 'auto' }}>
-          <form onSubmit={(e) => { e.preventDefault(); retryWithPasskey() }}>
+          <form onSubmit={async (e) => {
+            e.preventDefault()
+            setRetryingPasskey(true)
+            await retryWithPasskey()
+            setRetryingPasskey(false)
+          }}>
             <h2>Verify it's you</h2>
             <p className="hint">
               "{username || name}" is protected by a passkey. Use it to continue —
@@ -989,11 +998,12 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
             {passkeyError && passkeyError !== 'Cancelled' && (
               <p className="hint" style={{ color: 'var(--danger)' }}>{passkeyError}</p>
             )}
-            <button type="submit" className="primary">
-              Continue with passkey
+            <button type="submit" className="primary" disabled={retryingPasskey}>
+              {retryingPasskey && <span className="btn-spinner" />}
+              {retryingPasskey ? 'Follow your browser\'s prompt…' : 'Continue with passkey'}
               <span className="btn-icon">{Icon.key}</span>
             </button>
-            <button type="button" className="secondary" style={{ marginTop: 10 }} onClick={onSignOut}>
+            <button type="button" className="secondary" style={{ marginTop: 10 }} onClick={onSignOut} disabled={retryingPasskey}>
               Use a different name instead
             </button>
           </form>
@@ -1024,6 +1034,7 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
           <InvitePage
             code={inviteCode}
             socketRef={socketRef}
+            connected={connected}
             onJoin={(userId) => {
               sendContactRequest(userId)
               setInviteCode(null)
