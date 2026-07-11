@@ -145,7 +145,14 @@ button:focus-visible {
 }
 
 /* ---------- Welcome ---------- */
-
+.my-2{
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+}
+.my-4{
+  margin-top: 1.5rem;
+  margin-bottom: 1.5rem;
+}
 .lobby {
   min-height: 100dvh;
   display: grid;

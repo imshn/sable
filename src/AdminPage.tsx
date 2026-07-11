@@ -486,7 +486,7 @@ export function AdminPage() {
           <StatCard label="DAU/MAU (stickiness)" value={t.mau ? `${((t.dau / t.mau) * 100).toFixed(0)}%` : '—'} />
           <StatCard label="Invite Acceptance Rate" value={`${t.inviteAcceptanceRatePct}%`} sub={`${t.usedInvites}/${t.invites} used`} />
         </div>
-        <div className="admin-charts">
+        <div className="admin-charts my-2">
           <DayChart title="Daily signups" points={stats.series.signups} />
           <DayChart title="Logins" points={stats.series.logins} />
         </div>
@@ -503,7 +503,7 @@ export function AdminPage() {
           <StatCard label="Messages All-Time" value={t.messagesRelayed} />
           <StatCard label="Avg per User" value={t.avgMessagesPerUser} />
         </div>
-        <div className="admin-charts">
+        <div className="admin-charts my-2">
           <DayChart title="Messages relayed" points={stats.series.messages} />
         </div>
       </section>
@@ -523,7 +523,7 @@ export function AdminPage() {
           <StatCard label="Avg Duration" value={fmtDuration(t.avgCallDurationSec)} />
           <StatCard label="Longest Call" value={fmtDuration(t.longestCallDurationSec)} />
         </div>
-        <div className="admin-charts">
+        <div className="admin-charts my-2">
           <DayChart title="Calls per day" points={stats.series.calls} />
           <SplitChart title="Voice vs Video" data={callSplit} />
           <SplitChart title="Outcome" data={outcomeSplit} />
@@ -533,7 +533,7 @@ export function AdminPage() {
       {/* 6. Cloudflare TURN Analytics */}
       <section className="admin-section">
         <SectionHead icon={Icon.globe} title="Cloudflare TURN Analytics" />
-        <p className="hint" style={{ marginTop: 0 }}>
+        <p className="hint" style={{ marginTop: 10 }}>
           Bandwidth and per-session relay metrics need Cloudflare's own API (not configured here) — what's below is
           derived from this app's own call telemetry.
         </p>
@@ -572,7 +572,7 @@ export function AdminPage() {
           <StatCard label="Active Sessions (24h)" value={t.activeSessions24h} />
           <StatCard label="Avg Sessions / User" value={t.avgSessionsPerUser} />
         </div>
-        <div className="admin-charts">
+        <div className="admin-charts my-4">
           <SplitChart title="Login method" data={authSplit} />
         </div>
         <div className="admin-table-wrap">
@@ -616,7 +616,7 @@ export function AdminPage() {
 
       {section === 'moderation' && <>
       {/* 9. Moderation */}
-      <section className="admin-section">
+      <section className="admin-section my-2">
         <SectionHead icon={Icon.flag} title="Moderation" />
         <div className="admin-cards">
           <StatCard label="Reports" value={t.reports} sub={`${t.reportsUnresolved} unresolved`} />
