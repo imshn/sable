@@ -2274,15 +2274,6 @@ video.media { width: min(320px, 62vw); }
      mic/camera/share/chat/end, which doesn't all fit at once on the
      narrowest phones (iPhone SE etc) — scroll rather than clip/overflow. */
   .call-controls { gap: 10px; padding: 14px 12px 18px; overflow-x: auto; }
-
-  /* Contacts page has its own internal list+detail split — same single-pane
-     toggle as .shell above, so a 300px-min-width list pane doesn't crush a
-     375px-wide detail view down to a sliver. */
-  .contacts-list-pane { width: 100%; min-width: 0; border-right: none; }
-  .contacts-detail-pane { display: none; width: 100%; padding: 20px; }
-  .contacts-body.detail-open .contacts-list-pane { display: none; }
-  .contacts-body.detail-open .contacts-detail-pane { display: flex; }
-  .contacts-back-btn { position: absolute; top: 12px; left: 12px; z-index: 1; }
 }
 
 /* Contacts Page */
@@ -2380,6 +2371,20 @@ video.media { width: min(320px, 62vw); }
   padding: 32px;
   background: color-mix(in srgb, var(--surface) 30%, var(--bg));
   position: relative;
+}
+
+/* Contacts page has its own internal list+detail split — same single-pane
+   toggle as .shell uses elsewhere, so a 300px-min-width list pane doesn't
+   crush a 375px-wide detail view down to a sliver. Placed after the base
+   rules above on purpose: equal-specificity CSS resolves ties by source
+   order, so a media override earlier in the file loses to an unconditional
+   rule that comes later, regardless of viewport width. */
+@media (max-width: 860px) {
+  .contacts-list-pane { width: 100%; min-width: 0; border-right: none; }
+  .contacts-detail-pane { display: none; width: 100%; padding: 20px; }
+  .contacts-body.detail-open .contacts-list-pane { display: none; }
+  .contacts-body.detail-open .contacts-detail-pane { display: flex; }
+  .contacts-back-btn { position: absolute; top: 12px; left: 12px; z-index: 1; }
 }
 
 .search-input {
