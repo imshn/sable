@@ -491,6 +491,7 @@ interface CallOverlayProps {
   onToggleCam: () => void
   onToggleShare: () => void
   onHangup: () => void
+  onMinimize: () => void
   inviteCandidates: GroupMemberLike[]
   onInvite: (memberId: string) => void
   convo?: Convo
@@ -505,7 +506,7 @@ interface GroupMemberLike {
 
 function CallOverlay({
   call, title, avatarSeed, names, localStream, remoteStreams, micOn, camOn, sharing, sharers, camsOff, micsOff, quality, lowBandwidth,
-  activeSince, onToggleMic, onToggleCam, onToggleShare, onHangup, inviteCandidates, onInvite,
+  activeSince, onToggleMic, onToggleCam, onToggleShare, onHangup, onMinimize, inviteCandidates, onInvite,
   convo, onSendChat, onReadChat,
 }: CallOverlayProps) {
   const remotes = Object.entries(remoteStreams)
@@ -563,6 +564,11 @@ function CallOverlay({
             <div className="call-topbar-right">
               {call.status === 'active' && <span className="call-timer">{durationText}</span>}
               <QualityPill quality={quality} />
+              {call.status !== 'incoming' && (
+                <button className="icon-btn subtle" aria-label="Minimize call" title="Minimize and keep exploring" onClick={onMinimize}>
+                  {Icon.minimize}
+                </button>
+              )}
             </div>
           </div>
 
@@ -684,6 +690,80 @@ function CallOverlay({
         </div>
         {chatOpen && <CallChat convo={convo} names={names} onSend={onSendChat} onClose={() => setChatOpen(false)} />}
       </div>
+    </div>
+  )
+}
+
+interface MiniCallBarProps {
+  call: UseCallReturn['call']
+  title?: string
+  avatarSeed?: string
+  localStream: MediaStream | null
+  remoteStreams: Record<string, MediaStream>
+  micOn: boolean
+  activeSince: RefObject<number>
+  onToggleMic: () => void
+  onHangup: () => void
+  onExpand: () => void
+}
+
+// Floating PiP bubble — lets a call keep running while the rest of the app
+// is used normally. The stream objects themselves live in useCall's refs
+// (Shell-level, above both this and CallOverlay), so swapping which of the
+// two renders never touches the peer connection.
+function MiniCallBar({ call, title, avatarSeed, localStream, remoteStreams, micOn, activeSince, onToggleMic, onHangup, onExpand }: MiniCallBarProps) {
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    if (call.status !== 'active') return
+    setElapsed(Date.now() - (activeSince?.current || Date.now()))
+    const id = setInterval(() => setElapsed(Date.now() - (activeSince?.current || Date.now())), 1000)
+    return () => clearInterval(id)
+  }, [call.status, activeSince])
+
+  const durationText = (() => {
+    const s = Math.max(0, Math.floor(elapsed / 1000))
+    const m = Math.floor(s / 60), pad = (n: number) => String(n).padStart(2, '0')
+    return `${m}:${pad(s % 60)}`
+  })()
+
+  const remoteStream = Object.values(remoteStreams)[0]
+  const displayStream = remoteStream ?? localStream
+  const statusText = call.status === 'active' ? durationText : call.status === 'outgoing' ? 'Calling…' : 'Connecting…'
+
+  return (
+    <div
+      className="mini-call-bar"
+      role="button"
+      tabIndex={0}
+      onClick={onExpand}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onExpand() }}
+      aria-label={`Return to call with ${title}`}
+    >
+      {displayStream ? (
+        <Video stream={displayStream} muted={!remoteStream} className="mini-call-video" personName={title} seed={avatarSeed} />
+      ) : (
+        <span className="avatar" style={{ background: avatarBg(avatarSeed ?? title), color: '#fff' }}>{initials(title ?? '')}</span>
+      )}
+      <span className="mini-call-info">
+        <span className="mini-call-title">{title}</span>
+        <span className="mini-call-status">{statusText}</span>
+      </span>
+      <button
+        type="button"
+        className={`icon-btn subtle ${micOn ? '' : 'off'}`}
+        aria-label={micOn ? 'Mute microphone' : 'Unmute microphone'}
+        onClick={(e) => { e.stopPropagation(); onToggleMic() }}
+      >
+        {micOn ? Icon.mic : Icon.micOff}
+      </button>
+      <button
+        type="button"
+        className="icon-btn subtle mini-call-end"
+        aria-label="End call"
+        onClick={(e) => { e.stopPropagation(); onHangup() }}
+      >
+        {Icon.phoneEnd}
+      </button>
     </div>
   )
 }
@@ -816,6 +896,7 @@ function ForwardPicker({ rows, excludeId, onPick, onClose }: ForwardPickerProps)
 
 function Shell({ name, username, onSignOut }: { name: string; username: string; onSignOut: () => void }) {
   const [activeId, setActiveId] = useState<string | null>('contacts')
+  const [callMinimized, setCallMinimized] = useState(false)
   const [creatingGroup, setCreatingGroup] = useState(false)
   const [showProfile, setShowProfile] = useState(false)
   const [showInviteModal, setShowInviteModal] = useState(false)
@@ -938,6 +1019,13 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
     startCall, startGroupCall, accept, decline, hangup, toggleMic, toggleCam, toggleShare, inviteToCall,
   } = useCall(socketRef, connected, clientId, onLog)
 
+  // Minimizing is purely a UI state — the peer connection and MediaStreams
+  // live in useCall's own refs regardless of what renders here, so this
+  // just resets once there's no call left to minimize.
+  useEffect(() => {
+    if (call.status === 'idle') setCallMinimized(false)
+  }, [call.status])
+
   // merged sidebar rows: groups + contacts, most recent first
   const sidebarRows: SidebarRow[] = [
     ...groups.map((g) => ({ ...g, isGroup: true as const, memberCount: g.members.length })),
@@ -1025,6 +1113,8 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
   }
 
   const callTargetId = call.groupId ?? call.peerId ?? ''
+  const callTitle = call.groupId ? groups.find(g => g.id === call.groupId)?.name : contacts.find(c => c.id === call.peerId)?.name
+  const callAvatarSeed = call.groupId ?? call.peerId
 
   return (
     <div className={`shell ${activeId ? 'thread-open' : ''}`}>
@@ -1058,11 +1148,11 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
               window.history.pushState({}, '', '/')
             }}
           />
-        ) : call.status !== 'idle' ? (
+        ) : call.status !== 'idle' && !callMinimized ? (
           <CallOverlay
             call={call}
-            title={call.groupId ? groups.find(g => g.id === call.groupId)?.name : contacts.find(c => c.id === call.peerId)?.name}
-            avatarSeed={call.groupId ?? call.peerId}
+            title={callTitle}
+            avatarSeed={callAvatarSeed}
             names={(id) => contacts.find((c) => c.id === id)?.name ?? groups.flatMap((g) => g.members).find((m) => m.id === id)?.name ?? 'Unknown'}
             localStream={localStream}
             remoteStreams={remoteStreams}
@@ -1079,6 +1169,7 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
             onToggleCam={toggleCam}
             onToggleShare={toggleShare}
             onHangup={hangup}
+            onMinimize={() => setCallMinimized(true)}
             convo={convos[callTargetId]}
             onSendChat={(text) => send(callTargetId, { t: 'text', text })}
             onReadChat={() => markRead(callTargetId)}
@@ -1196,6 +1287,21 @@ function Shell({ name, username, onSignOut }: { name: string; username: string; 
               // For now, App relies on localStorage mostly.
             }
           }}
+        />
+      )}
+
+      {call.status !== 'idle' && call.status !== 'incoming' && callMinimized && (
+        <MiniCallBar
+          call={call}
+          title={callTitle}
+          avatarSeed={callAvatarSeed}
+          localStream={localStream}
+          remoteStreams={remoteStreams}
+          micOn={micOn}
+          activeSince={activeSince}
+          onToggleMic={toggleMic}
+          onHangup={hangup}
+          onExpand={() => setCallMinimized(false)}
         />
       )}
 
