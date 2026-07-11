@@ -137,6 +137,7 @@ export interface ChatTarget {
   id: string
   name: string
   online?: boolean
+  lastSeen?: number | null
   isGroup?: boolean
   members?: GroupMember[]
   owner?: string

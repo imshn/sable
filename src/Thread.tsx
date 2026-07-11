@@ -5,6 +5,7 @@ import { b64encode } from './crypto.ts'
 import { ConfirmModal } from './ConfirmModal.tsx'
 import { ReportModal } from './ReportModal.tsx'
 import { runtimeConfig } from './runtimeConfig.ts'
+import { relativeTime } from './relativeTime.ts'
 import type { ChatTarget, Convo, ConvoMessage, CallLogBody, FileBody, GroupMember, MentionRef, MessageBody, OutgoingEnvelope, ReplyRef } from './types.ts'
 
 const timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
@@ -1162,7 +1163,9 @@ export function Thread({
       ? convo?.typing
         ? 'typing…'
         : 'online'
-      : 'offline'
+      : target.lastSeen
+        ? `last seen ${relativeTime(target.lastSeen)}`
+        : 'offline'
 
   return (
     <section

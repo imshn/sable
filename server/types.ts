@@ -13,6 +13,11 @@ export interface OnlineUser {
   // open, so `dm`/`gdm` can still push a notification for a message that
   // arrives while online but not actually being looked at right now.
   activeThread?: string | null
+  // Page Visibility API state reported by the client (see set-visibility in
+  // presence.ts) — undefined is treated as visible, since a connection is
+  // almost always foreground right at hello-time. Lets an incoming call also
+  // buzz the OS when the tab is merely backgrounded, not just fully offline.
+  visible?: boolean
 }
 
 export interface KnownUser {
@@ -42,6 +47,14 @@ export interface PushPayload {
   body: string
   tag?: string
   url?: string
+  // Lets the service worker pick vibrate/requireInteraction/renotify
+  // behavior — a ringing call needs to stay on screen and buzz harder than
+  // a missed-call follow-up on the same tag, which needs to re-alert rather
+  // than silently replace it.
+  kind?: 'call-ringing' | 'call-missed'
+  // Stamped on right before sending (see notify.ts's pushToSubscriptions) so
+  // the service worker can report back which specific push got opened.
+  pushId?: string
 }
 
 export type PrivacyLevel = 'everyone' | 'contacts' | 'nobody'

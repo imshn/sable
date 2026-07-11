@@ -4,6 +4,7 @@ import type { Socket } from 'socket.io-client'
 import { Icon } from './icons.tsx'
 import { ConfirmModal } from './ConfirmModal.tsx'
 import { avatarBg } from './avatarColor.ts'
+import { relativeTime } from './relativeTime.ts'
 import { usePending } from './usePending.ts'
 import type { Contact, SearchUser } from './types.ts'
 
@@ -251,7 +252,7 @@ export function ContactsPage({
                   name={c.name}
                   username={c.username}
                   online={c.online}
-                  trailing={c.online ? 'Online' : ''}
+                  trailing={c.online ? 'Online' : c.lastSeen ? relativeTime(c.lastSeen) : ''}
                   active={selectedId === c.id}
                   onClick={() => setSelectedId(c.id)}
                 />
@@ -363,7 +364,11 @@ export function ContactsPage({
         </span>
         <div className="profile-detail-name">{person.name}</div>
         <div className="profile-detail-username">@{person.username}</div>
-        {kind === 'contact' && <div className={`status ${person.online ? 'online' : 'offline'}`}>{person.online ? 'Online' : 'Offline'}</div>}
+        {kind === 'contact' && (
+          <div className={`status ${person.online ? 'online' : 'offline'}`}>
+            {person.online ? 'Online' : person.lastSeen ? `Last seen ${relativeTime(person.lastSeen)}` : 'Offline'}
+          </div>
+        )}
 
         {kind === 'contact' && (
           <>

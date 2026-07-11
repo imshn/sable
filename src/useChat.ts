@@ -9,7 +9,7 @@ import {
   fingerprint,
   b64decode,
 } from './crypto.ts'
-import { currentPushSubscription, subscribeToPush, unsubscribeFromPush } from './push.ts'
+import { currentPushSubscription, subscribeToPush, unsubscribeFromPush, consumeAckPushFromUrl, queuePushAck, drainPushAcks } from './push.ts'
 import type {
   Contact, Group, Convo, ConvoMessage, MessageBody, OutgoingEnvelope,
   PasskeyActionResult, Passkey, Announcement, MyProfile, EncryptedPayload,
@@ -170,6 +170,7 @@ export function useChat(name: string, username: string, activeId: string | null 
         setConnected(true)
         setAuthError(null)
         socket.emit('hello', { id: clientId, name, username, pubKey })
+        socket.emit('set-visibility', { visible: document.visibilityState === 'visible' })
 
         // re-assert an existing subscription in case the relay's DB doesn't
         // have it anymore (e.g. restarted with a fresh database)
@@ -178,6 +179,8 @@ export function useChat(name: string, username: string, activeId: string | null 
           setPushEnabled(true)
           socket.emit('save-push-subscription', { subscription: existing.toJSON() })
         }
+
+        for (const id of drainPushAcks()) socket.emit('push-opened', { id })
       })
       socket.on('disconnect', () => alive && setConnected(false))
 
@@ -414,10 +417,30 @@ export function useChat(name: string, username: string, activeId: string | null 
     const onBrowserOnline = () => { if (!socket.connected) socket.connect() }
     window.addEventListener('online', onBrowserOnline)
 
+    // Foreground/background state for the incoming-call push decision (see
+    // calls.ts's call-offer) — re-asserted live, not just at connect time.
+    const onVisibilityChange = () => {
+      if (socket.connected) socket.emit('set-visibility', { visible: document.visibilityState === 'visible' })
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
+    // Picks up the "fresh window opened from a notification click" case;
+    // the "existing tab focused" case arrives via the SW message listener below.
+    consumeAckPushFromUrl()
+
+    const onSwMessage = (event: MessageEvent) => {
+      if (event.data?.type !== 'push-opened' || !event.data.pushId) return
+      if (socket.connected) socket.emit('push-opened', { id: event.data.pushId })
+      else queuePushAck(event.data.pushId)
+    }
+    navigator.serviceWorker?.addEventListener('message', onSwMessage)
+
     return () => {
       alive = false
       typingTimers.current.forEach(clearTimeout)
       window.removeEventListener('online', onBrowserOnline)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      navigator.serviceWorker?.removeEventListener('message', onSwMessage)
       socket.disconnect()
     }
   }, [name]) // eslint-disable-line react-hooks/exhaustive-deps

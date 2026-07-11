@@ -42,10 +42,21 @@ async function pushToSubscriptions(userId: string, prefKey: keyof NotificationPr
   if (prefs && prefs[prefKey] === 0) return
   const subs = await store.getPushSubscriptions(userId)
   for (const sub of subs) {
-    const result = await sendPush(sub, payload)
-    store.logPush(randomUUID(), userId, payload.tag, result.ok, !!result.expired)
+    // Stamped per-delivery (not per-payload) so a per-device open can be
+    // told apart — the service worker echoes this id back on click.
+    const pushId = randomUUID()
+    const result = await sendPush(sub, { ...payload, pushId })
+    store.logPush(pushId, userId, payload.tag, result.ok, !!result.expired)
     if (result.expired) store.deletePushSubscription(sub.endpoint)
   }
+}
+
+// Unlike notifyOffline, this pushes regardless of whether the recipient has
+// a live socket right now — a backgrounded/locked device still needs the
+// OS-level ring for an incoming call, and a missed-call notice matters even
+// if they're still connected but just didn't answer in time.
+export async function notifyCall(userId: string, payload: PushPayload): Promise<void> {
+  await pushToSubscriptions(userId, 'calls', payload)
 }
 
 // Buzzes a device when the app itself can't: zero live sockets for this

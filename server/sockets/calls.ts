@@ -3,7 +3,7 @@ import { io } from '../io.js'
 import { store } from '../db.js'
 import { online, privacyCache } from '../state.js'
 import { privacyAllows } from '../helpers.js'
-import { notifyOffline } from '../notify.js'
+import { notifyOffline, notifyCall } from '../notify.js'
 import { flagEnabled } from '../flags.js'
 import { recordCall } from '../metrics.js'
 import type { AppSocket, ConnectionCtx } from '../types.js'
@@ -64,7 +64,22 @@ export function registerCalls(socket: AppSocket, ctx: ConnectionCtx): void {
     const from = clientId()
     if (!from) return
     const open = await store.findOpenCall(from, msg.to)
-    if (open) store.endCall(open.id, open.status === 'answered' ? 'completed' : 'missed')
+    if (open) {
+      const missed = open.status !== 'answered'
+      store.endCall(open.id, missed ? 'missed' : 'completed')
+      // Only the caller ever reaches this branch for a still-ringing call —
+      // the callee's own explicit reject always goes through call-decline
+      // instead — so `from` is the caller giving up and `msg.to` is whoever
+      // missed the call. Reuses the ring's own tag so the OS updates that
+      // exact notification instead of stacking a second one.
+      if (missed) {
+        notifyCall(msg.to, {
+          title: 'Missed call',
+          body: `${online.get(from)?.name ?? 'Someone'} tried to call you`,
+          tag: `call-${from}`, url: '/', kind: 'call-missed',
+        })
+      }
+    }
     await route('call-end')(msg)
   })
 
@@ -90,7 +105,7 @@ export function registerCalls(socket: AppSocket, ctx: ConnectionCtx): void {
       notifyOffline(msg.to, 'calls', {
         title: 'Missed call',
         body: `${online.get(from)?.name ?? 'Someone'} tried to call you`,
-        tag: `call-${from}`, url: '/',
+        tag: `call-${from}`, url: '/', kind: 'call-missed',
       })
       if (!msg.restart && !msg.group) { store.logCall(randomUUID(), from, msg.to, null, msg.video !== false); recordCall() }
       return
@@ -109,5 +124,15 @@ export function registerCalls(socket: AppSocket, ctx: ConnectionCtx): void {
     // restarts or group-mesh offers (those re-use call-offer as plumbing)
     if (!msg.restart && !msg.group) { store.logCall(randomUUID(), from, msg.to, null, msg.video !== false); recordCall() }
     io.to(target.socketId).emit('call-offer', { ...msg, from, fromName: online.get(from)?.name })
+    // A live socket isn't the same as looking at the phone — a backgrounded
+    // or locked device still needs the OS-level ring, same idea as
+    // notifyIfNotViewing for messages.
+    if (!msg.restart && !msg.group && target.visible === false) {
+      notifyCall(msg.to, {
+        title: `${online.get(from)?.name ?? 'Someone'} is calling`,
+        body: msg.video === false ? 'Voice call' : 'Video call',
+        tag: `call-${from}`, url: '/', kind: 'call-ringing',
+      })
+    }
   })
 }

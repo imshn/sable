@@ -2,16 +2,8 @@ import { useState, useEffect } from 'react'
 import type { Socket } from 'socket.io-client'
 import { Icon } from './icons.tsx'
 import { usePending } from './usePending.ts'
+import { relativeTime as RELATIVE } from './relativeTime.ts'
 import type { SessionRow, LoginHistoryRow, Passkey, PasskeyActionResult } from './types.ts'
-
-const RELATIVE = (ts: number | null | undefined) => {
-  if (!ts) return 'Unknown'
-  const diff = Date.now() - Number(ts)
-  if (diff < 60_000) return 'Just now'
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m ago`
-  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h ago`
-  return new Date(Number(ts)).toLocaleDateString()
-}
 
 const deviceLabel = (t: string) => (t === 'singleDevice' ? 'This device only' : t === 'multiDevice' ? 'Synced (phone/cloud)' : 'Unknown type')
 

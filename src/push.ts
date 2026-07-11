@@ -44,3 +44,29 @@ export async function unsubscribeFromPush(): Promise<PushSubscription | null> {
   if (sub) await sub.unsubscribe()
   return sub
 }
+
+// Real per-notification open tracking: the service worker's notificationclick
+// reports back which push got clicked, either via postMessage (an existing
+// tab was focused) or, if a fresh window had to be opened, via a ?ackPush=
+// query param on first load. Queued here and drained by useChat.ts once the
+// socket is actually connected, since either signal can arrive before that.
+const pendingAcks: string[] = []
+
+export function queuePushAck(id: string): void {
+  if (id) pendingAcks.push(id)
+}
+
+export function drainPushAcks(): string[] {
+  return pendingAcks.splice(0, pendingAcks.length)
+}
+
+// Call once on app start: picks up the fresh-window case above and scrubs
+// the query param so a reload doesn't re-report it.
+export function consumeAckPushFromUrl(): void {
+  const url = new URL(window.location.href)
+  const id = url.searchParams.get('ackPush')
+  if (!id) return
+  queuePushAck(id)
+  url.searchParams.delete('ackPush')
+  window.history.replaceState(null, '', url.pathname + url.search + url.hash)
+}

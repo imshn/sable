@@ -49,6 +49,7 @@ interface Totals {
   callsAnswered: number; callsMissed: number; callsDeclined: number
   avgCallDurationSec: number; longestCallDurationSec: number; turnUsagePct: number
   pushSent: number; pushDelivered: number; pushFailed: number; pushDeliveryRatePct: number
+  pushOpened: number; pushOpenRatePct: number
   activePushDevices: number
   passkeyLogins: number; passwordlessLogins: number; failedLoginsTotal: number; failedLogins24h: number
   blockedAccounts: number; suspendedAccounts: number
@@ -476,9 +477,10 @@ export function AdminPage() {
           <StatCard label="Delivered" value={t.pushDelivered} />
           <StatCard label="Failed" value={t.pushFailed} />
           <StatCard label="Delivery Rate" value={`${t.pushDeliveryRatePct}%`} />
+          <StatCard label="Opened" value={t.pushOpened} sub="clicked the notification" />
+          <StatCard label="Open Rate" value={`${t.pushOpenRatePct}%`} />
           <StatCard label="Active Push Devices" value={t.activePushDevices} />
         </div>
-        <p className="hint">Open rate isn't tracked — that would need a per-notification read receipt, which this app doesn't send.</p>
       </section>
 
       {/* 8. Authentication Analytics */}
