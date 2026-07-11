@@ -7,6 +7,7 @@ import {
 } from '../webauthn.js'
 import { online, known, privacyCache, webauthnChallenges } from '../state.js'
 import { configNumber } from '../flags.js'
+import { log } from '../log.js'
 import type { AppSocket, ConnectionCtx, PrivacyLevel, PasskeySummary, PasskeyCredentialRow } from '../types.js'
 
 const passkeySummary = (rows: PasskeyCredentialRow[]): PasskeySummary[] =>
@@ -18,6 +19,15 @@ const passkeySummary = (rows: PasskeyCredentialRow[]): PasskeySummary[] =>
 // that isn't a live chat/call/group event" bucket.
 export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
   const { clientId } = ctx
+
+  // User-level audit trail: one row in security_events + one structured log
+  // line per security-relevant action. Detail is a short label, never content.
+  const audit = (event: string, detail: string | null = null) => {
+    const from = clientId()
+    if (!from) return
+    store.logSecurityEvent(randomUUID(), from, event, detail, ctx.ip)
+    log.audit.info({ userId: from, event, detail }, 'security event')
+  }
 
   // ---- passkeys ----
   // Challenges are short-lived and keyed by the identity attempting to
@@ -107,6 +117,7 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
       randomUUID(), from, credential.id, toB64(credential.publicKey),
       credential.counter, credentialDeviceType, credentialBackedUp, credential.transports as string[] | undefined
     )
+    audit('passkey_registered', credentialDeviceType)
     cb({ ok: true })
   })
 
@@ -120,6 +131,7 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
     const from = clientId()
     if (!from || !credentialId) { cb?.(false); return }
     await store.deletePasskey(credentialId, from)
+    audit('passkey_deleted')
     socket.emit('passkeys', passkeySummary(await store.getPasskeysByUser(from)))
     cb?.(true)
   })
@@ -162,6 +174,7 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
       onlineUser.name = cleanName!
       if (cleanUsername) onlineUser.username = cleanUsername
     }
+    audit('profile_updated', username ? 'username_changed' : null)
     socket.emit('profile-updated', await store.getUser(from))
     cb?.(true)
   })
@@ -216,6 +229,7 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
       bio_privacy:       isValid(settings.bio_privacy)       ? settings.bio_privacy       : 'everyone' as const,
     }
     await store.savePrivacySettings(from, cleaned)
+    audit('privacy_updated')
     privacyCache.set(from, { user_id: from, ...cleaned })
     socket.emit('privacy-settings', { user_id: from, ...cleaned })
     cb?.(true)
@@ -281,6 +295,7 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
     // Can't revoke your own current session this way (use sign-out for that)
     if (sessionId === socket.data.sessionId) { cb?.(false); return }
     await store.revokeSession(sessionId, from)
+    audit('session_revoked')
     // Kick that socket if it's still connected
     for (const [, s] of io.sockets.sockets) {
       if (s.data.sessionId === sessionId && s.data.clientId === from) {
@@ -296,6 +311,7 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
     const from = clientId()
     if (!from) { cb?.(false); return }
     await store.revokeAllSessionsExcept(from, socket.data.sessionId!)
+    audit('sessions_revoked_all')
     // Kick all other sockets for this user
     for (const [, s] of io.sockets.sockets) {
       if (s.data.clientId === from && s.id !== socket.id) {
@@ -311,6 +327,7 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
   socket.on('delete-account', async (cb?: (ok: boolean) => void) => {
     const from = clientId()
     if (!from) { cb?.(false); return }
+    audit('account_deleted')
     await store.deleteAccount(from)
     // Clean up in-memory presence
     online.delete(from)

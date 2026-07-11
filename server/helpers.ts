@@ -1,4 +1,5 @@
 import { io } from './io.js'
+import { env } from './config.js'
 import { online, known, groups } from './state.js'
 import type { PrivacyLevel } from './types.js'
 
@@ -32,12 +33,12 @@ export async function turnServers(): Promise<IceServer[]> {
   if (Date.now() - turnCache.at < 3600_000) return turnCache.servers
   let servers: IceServer[] = []
   try {
-    if (process.env.CF_TURN_KEY_ID && process.env.CF_TURN_API_TOKEN) {
+    if (env.CF_TURN_KEY_ID && env.CF_TURN_API_TOKEN) {
       const r = await fetch(
-        `https://rtc.live.cloudflare.com/v1/turn/keys/${process.env.CF_TURN_KEY_ID}/credentials/generate-ice-servers`,
+        `https://rtc.live.cloudflare.com/v1/turn/keys/${env.CF_TURN_KEY_ID}/credentials/generate-ice-servers`,
         {
           method: 'POST',
-          headers: { Authorization: `Bearer ${process.env.CF_TURN_API_TOKEN}`, 'Content-Type': 'application/json' },
+          headers: { Authorization: `Bearer ${env.CF_TURN_API_TOKEN}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ ttl: 7200 }),
           signal: AbortSignal.timeout(6000),
         }

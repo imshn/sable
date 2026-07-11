@@ -7,12 +7,15 @@
 // every new connection. The actual route/event logic lives in http.ts and
 // sockets/*.ts.
 import { createServer } from 'node:http'
+import { env } from './config.js'
+import { log } from './log.js'
 import { migrate, store } from './db.js'
 import { createHttpApp } from './http.js'
 import { initIo } from './io.js'
 import { known, groups } from './state.js'
 import { loadFlags } from './flags.js'
 import { startAdminRealtime } from './realtime.js'
+import { packetGuard, wrapSocketErrors } from './guard.js'
 import { registerPresence } from './sockets/presence.js'
 import { registerContacts } from './sockets/contacts.js'
 import { registerGroups } from './sockets/groups.js'
@@ -21,10 +24,8 @@ import { registerCalls } from './sockets/calls.js'
 import { registerSettings } from './sockets/settings.js'
 import type { AppSocket } from './types.js'
 
-const PORT = Number(process.env.PORT) || 3001
-
-process.on('uncaughtException', (e) => console.error('uncaughtException', e))
-process.on('unhandledRejection', (e) => console.error('unhandledRejection', e))
+process.on('uncaughtException', (e) => log.app.fatal({ err: e instanceof Error ? e.stack : String(e) }, 'uncaughtException'))
+process.on('unhandledRejection', (e) => log.app.error({ err: e instanceof Error ? e.stack : String(e) }, 'unhandledRejection'))
 
 const httpServer = createServer(createHttpApp())
 const io = initIo(httpServer)
@@ -37,9 +38,16 @@ for (const u of await store.allUsers()) {
 for (const g of await store.loadGroups()) {
   groups.set(g.id, { name: g.name, owner: g.owner, members: new Set(g.members) })
 }
-console.log(`restored ${known.size} users, ${groups.size} groups`)
+log.app.info({ users: known.size, groups: groups.size }, 'state restored')
 
 io.on('connection', (socket: AppSocket) => {
+  const ip = (socket.handshake.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim()
+             || socket.handshake.address
+  // Boundary first: error containment wraps every handler the modules
+  // register below; packetGuard rate-limits and shape-checks every packet
+  // before any handler runs.
+  wrapSocketErrors(socket)
+  packetGuard(socket, ip)
   const ctx = registerPresence(socket)
   registerContacts(socket, ctx)
   registerGroups(socket, ctx)
@@ -50,4 +58,4 @@ io.on('connection', (socket: AppSocket) => {
 
 startAdminRealtime()
 
-httpServer.listen(PORT, '0.0.0.0', () => console.log(`sable relay listening on :${PORT}`))
+httpServer.listen(env.PORT, '0.0.0.0', () => log.app.info({ port: env.PORT }, 'sable relay listening'))

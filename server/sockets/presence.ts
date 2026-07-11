@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { io } from '../io.js'
 import { store } from '../db.js'
 import { online, known, groups, privacyCache } from '../state.js'
-import { parseDeviceHint, groupInfo } from '../helpers.js'
+import { parseDeviceHint, groupInfo, privacyAllows } from '../helpers.js'
 import { notifyPresence } from '../notify.js'
 import { flagEnabled } from '../flags.js'
 import type { AppSocket, ConnectionCtx, ContactRow, ContactWithPresence } from '../types.js'
@@ -16,22 +16,46 @@ export function registerPresence(socket: AppSocket): ConnectionCtx {
   const ua = socket.handshake.headers['user-agent'] || ''
   const deviceHint = parseDeviceHint(ua)
 
+  // Only accepted contacts ever see each other's online/last-seen state, and
+  // even then only what the peer's own privacy settings allow — mirrors
+  // notifyPresence's live broadcast so the initial snapshot can't leak more
+  // than a subsequent presence event would.
   const getContactsWithPresence = async (userId: string): Promise<ContactWithPresence[]> => {
     const [contacts, nicknames] = await Promise.all([store.getContacts(userId), store.getContactNicknames(userId)])
+    // one bulk query for whichever peers aren't already in the privacy cache
+    const uncached = contacts
+      .map(c => (c.requester_id === userId ? c.recipient_id : c.requester_id))
+      .filter(id => !privacyCache.has(id))
+    if (uncached.length) {
+      const rows = await store.getPrivacySettingsBulk(uncached)
+      for (const id of uncached) {
+        privacyCache.set(id, rows.get(id) ?? {
+          user_id: id, message_privacy: 'everyone', call_privacy: 'everyone',
+          last_seen_privacy: 'everyone', online_privacy: 'everyone',
+          avatar_privacy: 'everyone', bio_privacy: 'everyone',
+        })
+      }
+    }
     return contacts.map(c => {
-      const peerId = c.requester_id === userId ? c.recipient_id : c.requester_id
-      return { ...c, online: online.has(peerId), nickname: nicknames[peerId] ?? null }
+      const isRequester = c.requester_id === userId
+      const peerId = isRequester ? c.recipient_id : c.requester_id
+      const isAccepted = c.status === 'accepted'
+      const peerPrivacy = privacyCache.get(peerId)
+      const showOnline = isAccepted && privacyAllows(peerPrivacy?.online_privacy ?? 'everyone', true) && online.has(peerId)
+      const showLastSeen = isAccepted && privacyAllows(peerPrivacy?.last_seen_privacy ?? 'everyone', true)
+      const peerLastSeenField = isRequester ? 'recipient_last_seen' : 'requester_last_seen'
+      return {
+        ...c,
+        [peerLastSeenField]: showLastSeen ? c[peerLastSeenField] : null,
+        online: showOnline,
+        nickname: nicknames[peerId] ?? null,
+      }
     })
   }
 
-  // Resolve relationship: returns contact row or null
-  const getContact = async (fromId: string, toId: string): Promise<ContactRow | null> => {
-    const contacts = await store.getContacts(fromId)
-    return contacts.find(c =>
-      (c.requester_id === fromId && c.recipient_id === toId) ||
-      (c.recipient_id === fromId && c.requester_id === toId)
-    ) || null
-  }
+  // Single-row relationship lookup — hot path, runs on every dm/call packet
+  const getContact = (fromId: string, toId: string): Promise<ContactRow | null> =>
+    store.getContactPair(fromId, toId)
 
   // Shared by plain login and passkey-verified login: creates the session
   // record, warms caches, and sends the initial state batch.
@@ -148,6 +172,22 @@ export function registerPresence(socket: AppSocket): ConnectionCtx {
     if (!clientId) return
     const me = online.get(clientId)
     if (me) me.activeThread = id ?? null
+  })
+
+  // Page Visibility API state — lets call-offer decide whether a backgrounded
+  // tab still needs an OS-level ring push on top of the live socket event.
+  socket.on('set-visibility', ({ visible }: { visible: boolean }) => {
+    const clientId = socket.data.clientId
+    if (!clientId) return
+    const me = online.get(clientId)
+    if (me) me.visible = !!visible
+  })
+
+  // Real per-notification open tracking, reported by the service worker's
+  // notificationclick — no identity needed, the id alone is enough to mark
+  // the right push_log row (see server/notify.ts's pushToSubscriptions).
+  socket.on('push-opened', ({ id }: { id: string }) => {
+    if (typeof id === 'string' && id) store.markPushOpened(id)
   })
 
   // ---- disconnect ----

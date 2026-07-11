@@ -1,5 +1,7 @@
 import express, { type Express } from 'express'
 import cors from 'cors'
+import helmet from 'helmet'
+import compression from 'compression'
 import { randomUUID } from 'node:crypto'
 import { store } from './db.js'
 import { vapidPublicKey } from './push.js'
@@ -8,13 +10,22 @@ import { broadcastAnnouncement } from './notify.js'
 import { registerAdmin } from './admin.js'
 import { flags, config } from './flags.js'
 import { recordRequest } from './metrics.js'
+import { env, originAllowed } from './config.js'
+import { httpLimit, errorHandler } from './guard.js'
+import { log } from './log.js'
 
 const BOOT_ID = randomUUID().slice(0, 8)
 
 export function createHttpApp(): Express {
   const app = express()
-  app.use(cors({ origin: true }))
-  app.use(express.json())
+  // Render sits one proxy hop in front — without this req.ip is Render's
+  // internal address and every rate limit hits one shared bucket.
+  app.set('trust proxy', 1)
+  app.use(helmet())
+  app.use(compression())
+  app.use(cors({ origin: (origin, cb) => cb(null, originAllowed(origin)) }))
+  // Largest legit JSON body is an admin announce — nothing close to 1mb.
+  app.use(express.json({ limit: '256kb' }))
   app.use((req, res, next) => {
     const start = process.hrtime.bigint()
     res.on('finish', () => {
@@ -50,10 +61,10 @@ export function createHttpApp(): Express {
     })
   })
 
-  app.get('/api/search', async (req, res) => {
+  app.get('/api/search', httpLimit('search'), async (req, res) => {
     const q = req.query.q
     const uid = req.query.uid
-    if (typeof q !== 'string' || q.trim().length < 2 || typeof uid !== 'string') { res.json([]); return }
+    if (typeof q !== 'string' || q.trim().length < 2 || q.length > 100 || typeof uid !== 'string') { res.json([]); return }
     const cleanQuery = q.trim().replace(/^@/, '')
     if (cleanQuery.length < 2) { res.json([]); return }
     res.json(await store.searchUsers(cleanQuery, uid))
@@ -62,7 +73,7 @@ export function createHttpApp(): Express {
   // Operator-triggered broadcast (no in-app admin UI — Shaan calls this
   // directly, e.g. via curl, when there's a real update to announce).
   app.post('/admin/announce', async (req, res) => {
-    if (!process.env.ADMIN_SECRET || req.headers['x-admin-secret'] !== process.env.ADMIN_SECRET) {
+    if (!env.ADMIN_SECRET || req.headers['x-admin-secret'] !== env.ADMIN_SECRET) {
       res.status(401).json({ error: 'unauthorized' })
       return
     }
@@ -75,7 +86,7 @@ export function createHttpApp(): Express {
     res.json({ ok: true, notified })
   })
 
-  app.get('/preview', async (req, res) => {
+  app.get('/preview', httpLimit('preview'), async (req, res) => {
     res.setHeader('Content-Type', 'application/json')
     try {
       const rawUrl = req.query.url
@@ -100,5 +111,7 @@ export function createHttpApp(): Express {
     }
   })
 
+  app.use(errorHandler)
+  log.app.info({ boot: BOOT_ID }, 'http app configured')
   return app
 }

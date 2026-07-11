@@ -6,12 +6,13 @@
 // broadcastAnnouncement) and the notifier (which needs `io` to emit).
 import { Server } from 'socket.io'
 import type { Server as HttpServer } from 'node:http'
+import { originAllowed } from './config.js'
 
 export let io: Server
 
 export function initIo(httpServer: HttpServer): Server {
   io = new Server(httpServer, {
-    cors: { origin: true },
+    cors: { origin: (origin, cb) => cb(null, originAllowed(origin)) },
     maxHttpBufferSize: 40e6,
   })
   return io

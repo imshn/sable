@@ -11,13 +11,14 @@ import {
   type VerifiedRegistrationResponse,
   type VerifiedAuthenticationResponse,
 } from '@simplewebauthn/server'
+import { env } from './config.js'
 import type { PasskeyCredentialRow } from './types.js'
 
 const RP_NAME = 'Sable'
 // rpID must be a domain the frontend is served from (not the relay's domain —
 // WebAuthn ceremonies are verified against the *browser's* origin/page).
-const RP_ID = process.env.WEBAUTHN_RP_ID || 'localhost'
-const ORIGINS = (process.env.WEBAUTHN_ORIGIN || 'http://localhost:5173').split(',').map((s) => s.trim())
+const RP_ID = env.WEBAUTHN_RP_ID
+const ORIGINS = env.WEBAUTHN_ORIGIN.split(',').map((s) => s.trim())
 
 export const toB64 = (bytes: Uint8Array): string => Buffer.from(bytes).toString('base64')
 export const fromB64 = (str: string): Uint8Array => new Uint8Array(Buffer.from(str, 'base64'))

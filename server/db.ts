@@ -2,14 +2,15 @@
 // (names, public keys, group rosters) or ciphertext the server cannot read.
 // Without TURSO_DATABASE_URL the relay runs memory-only, exactly as before.
 import { createClient, type Client } from '@libsql/client'
+import { env } from './config.js'
 import type {
   UserRow, ContactRow, InviteRow, GroupRow, MessageRow, UndeliveredRow,
   DeletedConversationRow, PrivacySettingsRow, NotificationPrefsRow, SessionRow,
   LoginHistoryRow, PasskeyCredentialRow, PushSubscriptionRow,
 } from './types.js'
 
-const url = process.env.TURSO_DATABASE_URL
-const authToken = process.env.TURSO_AUTH_TOKEN
+const url = env.TURSO_DATABASE_URL
+const authToken = env.TURSO_AUTH_TOKEN
 
 export const db: Client | null = url ? createClient({ url, authToken }) : null
 
@@ -189,6 +190,18 @@ export async function migrate(): Promise<void> {
       ts INTEGER NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON admin_audit_log(ts)`,
+    // User-level security audit trail (passkey changes, privacy changes,
+    // account deletion, session revocations) — separate from admin actions
+    // and from application logs, queryable per user.
+    `CREATE TABLE IF NOT EXISTS security_events (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      event TEXT NOT NULL,
+      detail TEXT,
+      ip TEXT,
+      ts INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_security_events_user ON security_events(user_id, ts)`,
     `CREATE TABLE IF NOT EXISTS feature_flags (
       key TEXT PRIMARY KEY,
       enabled INTEGER NOT NULL DEFAULT 1,
@@ -215,6 +228,7 @@ export async function migrate(): Promise<void> {
   await addCol("ALTER TABLE call_logs ADD COLUMN relay TEXT")
   await addCol("ALTER TABLE user_reports ADD COLUMN resolved INTEGER NOT NULL DEFAULT 0")
   await addCol("ALTER TABLE invitations ADD COLUMN used_at INTEGER")
+  await addCol("ALTER TABLE push_log ADD COLUMN opened_at INTEGER")
   await addCol("ALTER TABLE users ADD COLUMN updated_at INTEGER")
   await addCol("ALTER TABLE users ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
   await addCol("ALTER TABLE privacy_settings ADD COLUMN bio_privacy TEXT NOT NULL DEFAULT 'everyone'")
@@ -224,6 +238,21 @@ export async function migrate(): Promise<void> {
   // Fallback for existing users and index
   await db.execute("UPDATE users SET username = 'user_' || substr(id, 1, 6) WHERE username IS NULL")
   await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+
+  // Hot-path indexes (Phase 5 performance pass):
+  await db.batch([
+    // getContactPair / getContacts hit both sides of the pair; the PK only
+    // covers requester_id-first lookups
+    `CREATE INDEX IF NOT EXISTS idx_contacts_recipient ON contacts(recipient_id)`,
+    // countRecentFailedLogins runs on every single hello
+    `CREATE INDEX IF NOT EXISTS idx_failed_logins_ip_ts ON failed_logins(ip, ts)`,
+    // findOpenCall runs on every call answer/decline/end/relay-info
+    `CREATE INDEX IF NOT EXISTS idx_call_logs_pair ON call_logs(caller, callee, ts)`,
+    `CREATE INDEX IF NOT EXISTS idx_call_logs_group_ts ON call_logs(group_id, ts)`,
+    // admin user-table per-user counts
+    `CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender)`,
+    `CREATE INDEX IF NOT EXISTS idx_invitations_creator ON invitations(creator_id)`,
+  ], 'write')
 
   // Seed defaults — INSERT OR IGNORE so an operator's saved change is never
   // clobbered by a redeploy re-running this.
@@ -357,6 +386,31 @@ export const store = {
       args: [userId, userId]
     })
     return r.rows as unknown as ContactRow[]
+  },
+
+  // Single-pair lookup for the hot relay paths (dm, typing, every call
+  // signaling packet) — the old approach fetched the user's entire contact
+  // list with two user-table joins just to find one row.
+  getContactPair: async (a: string, b: string): Promise<ContactRow | null> => {
+    if (!db) return null
+    const r = await db.execute({
+      sql: `SELECT * FROM contacts
+            WHERE (requester_id = ? AND recipient_id = ?) OR (requester_id = ? AND recipient_id = ?)
+            LIMIT 1`,
+      args: [a, b, b, a],
+    })
+    return (r.rows[0] as unknown as ContactRow) ?? null
+  },
+
+  // Batched privacy-settings fetch — one query for a whole contact list
+  // instead of one per contact on first (uncached) load.
+  getPrivacySettingsBulk: async (userIds: string[]): Promise<Map<string, PrivacySettingsRow>> => {
+    const out = new Map<string, PrivacySettingsRow>()
+    if (!db || !userIds.length) return out
+    const placeholders = userIds.map(() => '?').join(',')
+    const r = await db.execute({ sql: `SELECT * FROM privacy_settings WHERE user_id IN (${placeholders})`, args: userIds })
+    for (const row of r.rows) out.set(String(row.user_id), row as unknown as PrivacySettingsRow)
+    return out
   },
 
   deleteContact: (requesterId: string, recipientId: string) =>
@@ -709,6 +763,11 @@ export const store = {
       args: [id, userId, tag || null, ok ? 1 : 0, expired ? 1 : 0, Date.now()],
     })),
 
+  // Reported by the service worker's notificationclick — a real per-push
+  // read receipt, not a guess. See public/sw.js + the push-opened socket event.
+  markPushOpened: (id: string) =>
+    db && safe(db.execute({ sql: `UPDATE push_log SET opened_at=? WHERE id=? AND opened_at IS NULL`, args: [Date.now(), id] })),
+
   // ---- Failed logins (security dashboard) ----
   logFailedLogin: (id: string, clientId: string | null, ip: string | null, reason: string) =>
     db && safe(db.execute({
@@ -746,6 +805,13 @@ export const store = {
       detail: row.detail as string | null, ip: row.ip as string | null, ts: Number(row.ts),
     }))
   },
+
+  // ---- User security events (audit trail) ----
+  logSecurityEvent: (id: string, userId: string, event: string, detail: string | null, ip: string | null) =>
+    db && safe(db.execute({
+      sql: `INSERT INTO security_events (id, user_id, event, detail, ip, ts) VALUES (?, ?, ?, ?, ?, ?)`,
+      args: [id, userId, event, detail, ip, Date.now()],
+    })),
 
   // ---- Feature flags ----
   getFeatureFlags: async (): Promise<Record<string, boolean>> => {

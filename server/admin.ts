@@ -16,6 +16,8 @@ import { perfSnapshot } from './metrics.js'
 import { store } from './db.js'
 import { vapidPublicKey } from './push.js'
 import { turnServers } from './helpers.js'
+import { env } from './config.js'
+import { log } from './log.js'
 
 const DAY = 86_400_000
 
@@ -33,9 +35,10 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   const f = failures.get(ip)
   if (f && f.until > Date.now()) { res.status(404).json({ detail: 'Not Found' }); return }
 
-  if (!process.env.ADMIN_SECRET || req.headers['x-admin-secret'] !== process.env.ADMIN_SECRET) {
+  if (!env.ADMIN_SECRET || req.headers['x-admin-secret'] !== env.ADMIN_SECRET) {
     const count = (f?.count ?? 0) + 1
     failures.set(ip, { count, until: count >= MAX_FAILS ? Date.now() + LOCKOUT_MS : 0 })
+    log.security.warn({ ip, count }, 'admin auth failure')
     res.status(404).json({ detail: 'Not Found' })
     return
   }
@@ -111,7 +114,7 @@ export function registerAdmin(app: Express): void {
       messagesRelayed, messages24h, messages7d, activeSessions24h, totalSessionsCount,
       invites, usedInvites,
       callsTotal, videoCalls, voiceCalls, calls24h, callsAnswered, callsMissed, callsDeclined,
-      pushSent, pushDelivered, pushFailed, activePushDevices,
+      pushSent, pushDelivered, pushFailed, pushOpened, activePushDevices,
       passkeyLogins, passwordlessLogins, failedLoginsTotal, failedLogins24h,
       blockedAccounts, suspendedAccounts,
       signups, logins, messages, inviteSeries, callSeries,
@@ -145,6 +148,7 @@ export function registerAdmin(app: Express): void {
       count(`SELECT COUNT(*) c FROM push_log`),
       count(`SELECT COUNT(*) c FROM push_log WHERE ok=1`),
       count(`SELECT COUNT(*) c FROM push_log WHERE ok=0`),
+      count(`SELECT COUNT(*) c FROM push_log WHERE opened_at IS NOT NULL`),
       count(`SELECT COUNT(DISTINCT user_id) c FROM push_subscriptions`),
       count(`SELECT COUNT(*) c FROM user_sessions WHERE via='passkey'`),
       count(`SELECT COUNT(*) c FROM user_sessions WHERE via='passwordless'`),
@@ -223,6 +227,7 @@ export function registerAdmin(app: Express): void {
         avgCallDurationSec, longestCallDurationSec, turnUsagePct: turnPct,
         pushSent, pushDelivered, pushFailed,
         pushDeliveryRatePct: pushSent ? +((pushDelivered / pushSent) * 100).toFixed(1) : 0,
+        pushOpened, pushOpenRatePct: pushDelivered ? +((pushOpened / pushDelivered) * 100).toFixed(1) : 0,
         activePushDevices,
         passkeyLogins, passwordlessLogins, failedLoginsTotal, failedLogins24h,
         blockedAccounts, suspendedAccounts,

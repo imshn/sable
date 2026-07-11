@@ -3,6 +3,7 @@
 // Auth happens once at connection (handshake.auth.secret); wrong or missing
 // secret just gets disconnected, no error emitted back.
 import { io } from './io.js'
+import { env } from './config.js'
 import { online } from './state.js'
 import { perfSnapshot } from './metrics.js'
 
@@ -10,7 +11,7 @@ export function startAdminRealtime(): void {
   const nsp = io.of('/admin')
 
   nsp.use((socket, next) => {
-    if (process.env.ADMIN_SECRET && socket.handshake.auth?.secret === process.env.ADMIN_SECRET) { next(); return }
+    if (env.ADMIN_SECRET && socket.handshake.auth?.secret === env.ADMIN_SECRET) { next(); return }
     next(new Error('unauthorized'))
   })
 

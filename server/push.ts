@@ -2,12 +2,13 @@
 // closed. Payloads are metadata only ("new message from X") — the server
 // still never sees plaintext, so it can't put message content in a push.
 import webpush, { type WebPushError } from 'web-push'
+import { env } from './config.js'
 import { configNumber } from './flags.js'
 import type { PushSubscriptionRow, PushPayload } from './types.js'
 
-const PUBLIC_KEY = process.env.WEB_PUSH_PUBLIC_KEY
-const PRIVATE_KEY = process.env.WEB_PUSH_PRIVATE_KEY
-const CONTACT = process.env.WEB_PUSH_CONTACT || 'mailto:admin@example.com'
+const PUBLIC_KEY = env.WEB_PUSH_PUBLIC_KEY
+const PRIVATE_KEY = env.WEB_PUSH_PRIVATE_KEY
+const CONTACT = env.WEB_PUSH_CONTACT
 
 const enabled = !!(PUBLIC_KEY && PRIVATE_KEY)
 if (enabled) webpush.setVapidDetails(CONTACT, PUBLIC_KEY!, PRIVATE_KEY!)
