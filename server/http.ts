@@ -18,9 +18,12 @@ const BOOT_ID = randomUUID().slice(0, 8)
 
 export function createHttpApp(): Express {
   const app = express()
-  // Render sits one proxy hop in front — without this req.ip is Render's
-  // internal address and every rate limit hits one shared bucket.
-  app.set('trust proxy', 1)
+  // Render fronts the app with a multi-hop proxy chain whose per-request
+  // edge IPs vary — 'trust proxy: 1' made req.ip the edge node, giving every
+  // request its own rate-limit bucket (verified in prod). Trusting the full
+  // chain takes the leftmost x-forwarded-for entry, the same convention
+  // presence.ts and admin.ts already use for socket/admin IPs.
+  app.set('trust proxy', true)
   app.use(helmet())
   app.use(compression())
   app.use(cors({ origin: (origin, cb) => cb(null, originAllowed(origin)) }))
