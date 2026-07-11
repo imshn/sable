@@ -1886,6 +1886,125 @@ video.media { width: min(320px, 62vw); }
 
 .modal.send-preview { width: min(560px, 94vw); }
 
+/* ---------- Settings modal (profile/privacy/notifications/security/general) ---------- */
+
+.profile-modal {
+  display: flex;
+  flex-direction: row;
+  width: 800px;
+  max-width: 95vw;
+  height: 600px;
+  max-height: 90vh;
+  padding: 0;
+  overflow: hidden;
+}
+
+.settings-sidebar {
+  width: 30%;
+  min-width: 200px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-alt);
+  flex-shrink: 0;
+}
+
+.settings-sidebar-head { padding: 24px 20px; display: flex; align-items: center; }
+
+.settings-sidebar-nav {
+  padding: 8px 12px;
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+}
+
+.settings-sidebar-nav .drawer-item.active { background: var(--bg-hover); font-weight: 600; }
+
+.settings-sidebar-foot { border-top: 1px solid var(--border); padding: 12px; flex-shrink: 0; }
+
+.settings-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg);
+  position: relative;
+  min-width: 0;
+}
+
+.settings-content-head {
+  padding: 20px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.settings-content-body { flex: 1; overflow-y: auto; padding: 24px; min-height: 0; }
+
+/* Small phones (iPhone SE and similar, ~375px and down): the fixed 800px/
+   30%-sidebar desktop layout would crush the content pane into ~150px, so
+   go full-screen and fold the vertical tab rail into a horizontal strip,
+   the same pattern the admin dashboard's sidebar already uses below 860px. */
+@media (max-width: 640px) {
+  .profile-modal {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    flex-direction: column;
+  }
+
+  .settings-sidebar {
+    width: 100%;
+    min-width: 0;
+    flex-direction: row;
+    align-items: stretch;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .settings-sidebar-head { display: none; } /* content header already shows the section title */
+
+  .settings-sidebar-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: visible;
+    padding: 6px 8px;
+    gap: 4px;
+  }
+
+  .settings-sidebar-nav .drawer-item {
+    flex-shrink: 0;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 12px;
+    font-size: 0.68rem;
+    text-align: center;
+  }
+
+  .settings-sidebar-nav .drawer-glyph { width: 28px; height: 28px; }
+  .settings-sidebar-nav .drawer-glyph svg { width: 15px; height: 15px; }
+
+  .settings-sidebar-foot {
+    border-top: none;
+    border-left: 1px solid var(--border);
+    padding: 6px 8px;
+    display: flex;
+    align-items: center;
+  }
+
+  .settings-sidebar-foot .drawer-item { flex-direction: column; gap: 2px; padding: 6px 10px; }
+  .settings-sidebar-foot .drawer-item-label { display: none; } /* icon-only sign-out on the mobile strip */
+
+  .settings-content-head { padding: 14px 16px; }
+  .settings-content-body { padding: 16px; }
+}
+
 .edit-stage {
   display: grid;
   place-items: center;
@@ -2151,7 +2270,19 @@ video.media { width: min(320px, 62vw); }
 
   .call-note { display: none; }
   .call-btn-label { display: none; }
-  .call-controls { gap: 10px; padding: 14px 12px 18px; }
+  /* overflow-x safety net: a group call can add an invite button on top of
+     mic/camera/share/chat/end, which doesn't all fit at once on the
+     narrowest phones (iPhone SE etc) — scroll rather than clip/overflow. */
+  .call-controls { gap: 10px; padding: 14px 12px 18px; overflow-x: auto; }
+
+  /* Contacts page has its own internal list+detail split — same single-pane
+     toggle as .shell above, so a 300px-min-width list pane doesn't crush a
+     375px-wide detail view down to a sliver. */
+  .contacts-list-pane { width: 100%; min-width: 0; border-right: none; }
+  .contacts-detail-pane { display: none; width: 100%; padding: 20px; }
+  .contacts-body.detail-open .contacts-list-pane { display: none; }
+  .contacts-body.detail-open .contacts-detail-pane { display: flex; }
+  .contacts-back-btn { position: absolute; top: 12px; left: 12px; z-index: 1; }
 }
 
 /* Contacts Page */
@@ -2248,6 +2379,7 @@ video.media { width: min(320px, 62vw); }
   display: flex;
   padding: 32px;
   background: color-mix(in srgb, var(--surface) 30%, var(--bg));
+  position: relative;
 }
 
 .search-input {

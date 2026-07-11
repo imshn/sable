@@ -491,9 +491,16 @@ export function ContactsPage({
           </button>
         </div>
       </header>
-      <div className="contacts-body">
+      <div className={`contacts-body ${selectedId ? 'detail-open' : ''}`}>
         <div className="contacts-list-pane">{renderList()}</div>
-        <div className="contacts-detail-pane">{renderDetail()}</div>
+        <div className="contacts-detail-pane">
+          {selectedId && (
+            <button className="icon-btn back-btn contacts-back-btn" aria-label="Back to list" onClick={() => setSelectedId(null)}>
+              {Icon.back}
+            </button>
+          )}
+          {renderDetail()}
+        </div>
       </div>
 
       {userToBlock && (

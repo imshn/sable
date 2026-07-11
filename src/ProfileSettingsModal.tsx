@@ -85,48 +85,43 @@ export function ProfileSettingsModal({
 
   return (
     <div className="modal-backdrop" onClick={() => onClose()}>
-      <div
-        className="modal profile-modal"
-        onClick={e => e.stopPropagation()}
-        style={{ display: 'flex', flexDirection: 'row', width: '800px', maxWidth: '95vw', height: '600px', maxHeight: '90vh', padding: 0, overflow: 'hidden' }}
-      >
-        {/* Left nav */}
-        <div className="settings-sidebar" style={{ width: '30%', minWidth: 200, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--bg-alt)' }}>
-          <header style={{ padding: '24px 20px', display: 'flex', alignItems: 'center' }}>
+      <div className="modal profile-modal" onClick={e => e.stopPropagation()}>
+        {/* Left nav (horizontal tab strip on narrow screens) */}
+        <div className="settings-sidebar">
+          <header className="settings-sidebar-head">
             <h2 style={{ fontSize: '1.4rem', margin: 0, fontWeight: 600 }}>Settings</h2>
           </header>
 
-          <div style={{ padding: '8px 12px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div className="settings-sidebar-nav">
             {TABS.map(tab => (
               <button
                 key={tab.id}
                 className={`drawer-item ${activeTab === tab.id ? 'active' : ''}`}
                 onClick={() => setActiveTab(tab.id)}
-                style={{ fontWeight: activeTab === tab.id ? '600' : 'normal', backgroundColor: activeTab === tab.id ? 'var(--bg-hover)' : 'transparent' }}
               >
                 <span className="drawer-glyph">{Icon[tab.icon]}</span>
-                {tab.label}
+                <span className="drawer-item-label">{tab.label}</span>
               </button>
             ))}
           </div>
 
-          {/* Sign out pinned at bottom */}
-          <div style={{ borderTop: '1px solid var(--border)', padding: 12 }}>
+          {/* Sign out pinned at the end */}
+          <div className="settings-sidebar-foot">
             <button className="drawer-item danger" onClick={() => { onClose(); onSignOut?.() }}>
               <span className="drawer-glyph" style={{ color: 'var(--danger)' }}>{Icon.signout}</span>
-              Sign Out
+              <span className="drawer-item-label">Sign Out</span>
             </button>
           </div>
         </div>
 
         {/* Right content */}
-        <div className="settings-content" style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: 'var(--bg)', position: 'relative' }}>
-          <header style={{ padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+        <div className="settings-content">
+          <header className="settings-content-head">
             <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 500 }}>{tabTitle}</h3>
             <button className="icon-btn subtle" onClick={() => onClose()} title="Close">{Icon.x}</button>
           </header>
 
-          <div style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
+          <div className="settings-content-body">
             {error && <div className="error-banner" style={{ marginBottom: 16 }}>{error}</div>}
 
             {/* PROFILE TAB */}
