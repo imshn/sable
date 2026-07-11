@@ -18,6 +18,8 @@ import { vapidPublicKey } from './push.js'
 import { turnServers } from './helpers.js'
 import { env } from './config.js'
 import { log } from './log.js'
+import { enqueueAdminAudit, queueStats } from './queue.js'
+import { redisHealth } from './redis.js'
 
 const DAY = 86_400_000
 
@@ -47,7 +49,7 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
 }
 
 const audit = (action: string, target: string | null, detail: string | null, ip: string) =>
-  store.logAdminAction(randomUUID(), action, target, detail, ip)
+  enqueueAdminAudit(randomUUID(), action, target, detail, ip)
 
 const count = async (sql: string, args: unknown[] = []): Promise<number> => {
   if (!db) return 0
@@ -177,8 +179,10 @@ export function registerAdmin(app: Express): void {
       turnPct = relayTotal ? +(((relayCounts.turn ?? 0) / relayTotal) * 100).toFixed(1) : 0
     }
 
-    const [dbHealth, suspiciousIps, recentLogins, reportRows, auditLog] = await Promise.all([
+    const [dbHealth, redisState, queues, suspiciousIps, recentLogins, reportRows, auditLog] = await Promise.all([
       checkDb(),
+      redisHealth(),
+      queueStats(),
       store.suspiciousIps(),
       db ? db.execute(`
         SELECT s.user_id, u.name, s.ip, s.device_hint, s.via, s.logged_in_at, s.last_active, s.revoked
@@ -196,19 +200,22 @@ export function registerAdmin(app: Express): void {
       store.getAuditLog(50),
     ])
 
-    const turnConfigured = !!(process.env.CF_TURN_KEY_ID && process.env.CF_TURN_API_TOKEN) || (await turnServers()).length > 0
+    const turnConfigured = !!(env.CF_TURN_KEY_ID && env.CF_TURN_API_TOKEN) || (await turnServers()).length > 0
     const health = {
       api: 'healthy' as const,
       database: dbHealth,
       socketIo: 'healthy' as const,
       turn: turnConfigured ? 'healthy' as const : 'warning' as const,
       push: vapidPublicKey ? 'healthy' as const : 'warning' as const,
-      redis: 'not_configured' as const,
+      redis: redisState,
       email: 'not_configured' as const,
       storage: 'not_configured' as const, // files are E2E-encrypted message payloads, never stored as blobs server-side
     }
-    const overall = Object.values(health).some((s) => s === 'offline') ? 'offline'
-      : Object.values(health).some((s) => s === 'warning') ? 'warning' : 'healthy'
+    // redis down degrades to direct calls (queues fall back), so it can
+    // only ever drag overall to 'warning', never 'offline'
+    const core = { ...health, redis: health.redis === 'offline' ? 'warning' as const : health.redis }
+    const overall = Object.values(core).some((s) => s === 'offline') ? 'offline'
+      : Object.values(core).some((s) => s === 'warning') ? 'warning' : 'healthy'
 
     res.json({
       generatedAt: now,
@@ -238,6 +245,7 @@ export function registerAdmin(app: Express): void {
       },
       series: { signups, logins, messages, invites: inviteSeries, calls: callSeries },
       security: { suspiciousIps, failedLogins24h },
+      queues,
       recentLogins,
       reports: reportRows,
       flags,

@@ -1,9 +1,11 @@
 // Web Push: OS-level notifications that reach a device even with every tab
 // closed. Payloads are metadata only ("new message from X") — the server
 // still never sees plaintext, so it can't put message content in a push.
+import { randomUUID } from 'node:crypto'
 import webpush, { type WebPushError } from 'web-push'
 import { env } from './config.js'
 import { configNumber } from './flags.js'
+import { store } from './db.js'
 import type { PushSubscriptionRow, PushPayload } from './types.js'
 
 const PUBLIC_KEY = env.WEB_PUSH_PUBLIC_KEY
@@ -49,4 +51,17 @@ export async function sendPush(sub: PushSubscriptionRow, payload: PushPayload): 
     }
   }
   return { ok: false }
+}
+
+// One complete delivery to one device: send, log the outcome, prune the
+// subscription if the browser invalidated it. This is both the BullMQ push
+// worker's job processor and the direct path when Redis isn't configured.
+// Throws on transient failure so the queue's retry/backoff/DLQ take over;
+// an expired subscription is terminal, not an error — retrying it would
+// fail identically forever.
+export async function deliverPush(sub: PushSubscriptionRow, payload: PushPayload, userId: string): Promise<void> {
+  const result = await sendPush(sub, payload)
+  store.logPush(payload.pushId ?? randomUUID(), userId, payload.tag, result.ok, !!result.expired)
+  if (result.expired) { store.deletePushSubscription(sub.endpoint); return }
+  if (!result.ok) throw new Error('push delivery failed')
 }

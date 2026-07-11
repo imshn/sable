@@ -813,6 +813,25 @@ export const store = {
       args: [id, userId, event, detail, ip, Date.now()],
     })),
 
+  // Retention pass, run by the queued cleanup job. Only true log tables are
+  // pruned — invitations are kept even when expired so invite analytics
+  // stay honest, and audit tables (admin_audit_log, security_events) are
+  // kept indefinitely; permanence is the point of an audit trail.
+  runCleanup: async (): Promise<Record<string, number>> => {
+    if (!db) return {}
+    const now = Date.now()
+    const [failedLogins, pushLog, revokedSessions] = await Promise.all([
+      db.execute({ sql: `DELETE FROM failed_logins WHERE ts < ?`, args: [now - 30 * 86_400_000] }),
+      db.execute({ sql: `DELETE FROM push_log WHERE ts < ?`, args: [now - 90 * 86_400_000] }),
+      db.execute({ sql: `DELETE FROM user_sessions WHERE revoked = 1 AND last_active < ?`, args: [now - 90 * 86_400_000] }),
+    ])
+    return {
+      failedLogins: failedLogins.rowsAffected,
+      pushLog: pushLog.rowsAffected,
+      revokedSessions: revokedSessions.rowsAffected,
+    }
+  },
+
   // ---- Feature flags ----
   getFeatureFlags: async (): Promise<Record<string, boolean>> => {
     if (!db) return {}

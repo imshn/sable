@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { io } from './io.js'
 import { store } from './db.js'
-import { sendPush } from './push.js'
+import { enqueuePush } from './queue.js'
 import { online, privacyCache } from './state.js'
 import { privacyAllows } from './helpers.js'
 import { flagEnabled } from './flags.js'
@@ -43,11 +43,10 @@ async function pushToSubscriptions(userId: string, prefKey: keyof NotificationPr
   const subs = await store.getPushSubscriptions(userId)
   for (const sub of subs) {
     // Stamped per-delivery (not per-payload) so a per-device open can be
-    // told apart — the service worker echoes this id back on click.
-    const pushId = randomUUID()
-    const result = await sendPush(sub, { ...payload, pushId })
-    store.logPush(pushId, userId, payload.tag, result.ok, !!result.expired)
-    if (result.expired) store.deletePushSubscription(sub.endpoint)
+    // told apart — the service worker echoes this id back on click. Each
+    // device is its own job so one dead endpoint's retries never delay the
+    // others; without Redis this delivers directly, exactly as before.
+    enqueuePush(sub, { ...payload, pushId: randomUUID() }, userId)
   }
 }
 

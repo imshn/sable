@@ -63,6 +63,7 @@ interface Stats {
   online: { count: number; users: { id: string; name: string; username?: string }[] }
   series: { signups: DayPoint[]; logins: DayPoint[]; messages: DayPoint[]; invites: DayPoint[]; calls: DayPoint[] }
   security: { suspiciousIps: { ip: string; count: number }[]; failedLogins24h: number }
+  queues: Record<string, Record<string, number>> | null
   recentLogins: { userId: string; name?: string; ip?: string; device?: string; via: string; loggedInAt: number; lastActive: number; revoked: boolean }[]
   reports: { id: string; reporterId: string; reportedId: string; category: string; details?: string; createdAt: number; resolved: boolean }[]
   flags: Record<string, boolean>
@@ -387,6 +388,20 @@ export function AdminPage() {
           <StatCard label="Messages/min (live)" value={(live?.messagesPerMinute ?? stats.performance.messagesPerMinute).toFixed(1)} />
           <StatCard label="Calls/min (live)" value={(live?.callsPerMinute ?? stats.performance.callsPerMinute).toFixed(1)} />
         </div>
+        {stats.queues ? (
+          <div className="admin-cards" style={{ marginTop: 12 }}>
+            {Object.entries(stats.queues).map(([name, c]) => (
+              <StatCard
+                key={name}
+                label={`Queue: ${name}`}
+                value={`${(c.waiting ?? 0) + (c.active ?? 0) + (c.delayed ?? 0)} pending`}
+                sub={`${c.failed ?? 0} failed (DLQ) · ${c.completed ?? 0} done`}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="hint">Background queues run once REDIS_URL is configured — until then push and audit writes go direct.</p>
+        )}
         {stats.performance.slowestEndpoints.length > 0 && (
           <div className="admin-table-wrap" style={{ marginTop: 12 }}>
             <table className="admin-table">

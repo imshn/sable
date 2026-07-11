@@ -44,6 +44,23 @@ export function setCounterStore(store: CounterStore): void {
   activeStore = store
 }
 
+// Redis-backed counters for multi-instance deployments (REDIS_SCALE_OUT=1)
+// — INCR + first-hit PEXPIRE gives the same fixed-window semantics as the
+// memory store, shared across every instance. Fails open: if Redis errors,
+// traffic is allowed rather than blocking real users on infra hiccups.
+export class RedisCounterStore implements CounterStore {
+  constructor(private r: { incr(key: string): Promise<number>; pexpire(key: string, ms: number): Promise<number> }) {}
+  async incr(key: string, windowMs: number): Promise<number> {
+    try {
+      const n = await this.r.incr(key)
+      if (n === 1) await this.r.pexpire(key, windowMs)
+      return n
+    } catch {
+      return 0 // fail open
+    }
+  }
+}
+
 export interface LimitRule {
   // sustained window
   max: number

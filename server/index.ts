@@ -16,6 +16,8 @@ import { known, groups } from './state.js'
 import { loadFlags } from './flags.js'
 import { startAdminRealtime } from './realtime.js'
 import { packetGuard, wrapSocketErrors } from './guard.js'
+import { redisEnabled, makeRedis } from './redis.js'
+import { startWorkers, scheduleMaintenance } from './queue.js'
 import { registerPresence } from './sockets/presence.js'
 import { registerContacts } from './sockets/contacts.js'
 import { registerGroups } from './sockets/groups.js'
@@ -29,6 +31,17 @@ process.on('unhandledRejection', (e) => log.app.error({ err: e instanceof Error 
 
 const httpServer = createServer(createHttpApp())
 const io = initIo(httpServer)
+
+// Multi-instance readiness, deliberately gated: on a single instance the
+// Redis adapter adds a distant-region round trip to every broadcast for
+// zero benefit. Flip REDIS_SCALE_OUT=1 when a second instance exists.
+if (redisEnabled && env.REDIS_SCALE_OUT === '1') {
+  const { createAdapter } = await import('@socket.io/redis-adapter')
+  io.adapter(createAdapter(makeRedis(), makeRedis()))
+  const { setCounterStore, RedisCounterStore } = await import('./rateLimit.js')
+  setCounterStore(new RedisCounterStore(makeRedis()))
+  log.app.info('scale-out mode: socket.io redis adapter + shared rate-limit counters')
+}
 
 await migrate()
 await loadFlags()
@@ -57,5 +70,11 @@ io.on('connection', (socket: AppSocket) => {
 })
 
 startAdminRealtime()
+
+// In-process queue workers (no-ops without REDIS_URL). Jobs live in Redis,
+// so a restart never loses queued work — server/worker.ts is the standalone
+// entrypoint for the day these move to a dedicated background service.
+startWorkers()
+await scheduleMaintenance()
 
 httpServer.listen(env.PORT, '0.0.0.0', () => log.app.info({ port: env.PORT }, 'sable relay listening'))

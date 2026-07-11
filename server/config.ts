@@ -32,9 +32,12 @@ const schema = z.object({
   // leading-* wildcard subdomain pattern like https://*.vercel.app.
   CORS_ORIGINS: z.string().default('https://sable-chat.vercel.app,https://sable-chat-*-mohammed-shahnawazs-projects.vercel.app,http://localhost:5173,http://localhost:4173'),
 
-  // Batch 2: presence of a Redis URL is what switches on the Redis-backed
-  // rate-limit store, cache layer, Socket.IO adapter, and BullMQ queues.
+  // Batch 2: presence of a Redis URL switches on the BullMQ queues and
+  // Redis health checks. REDIS_SCALE_OUT=1 additionally enables the
+  // Socket.IO Redis adapter + shared rate-limit counters — only worth the
+  // per-packet round trip once there's more than one instance.
   REDIS_URL: z.url().optional(),
+  REDIS_SCALE_OUT: z.string().optional(),
 
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error', 'fatal']).default('info'),
 })

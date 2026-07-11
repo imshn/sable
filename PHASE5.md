@@ -67,20 +67,35 @@ the underlying feature does.
   (every call event), `call_logs(group_id, ts)`, `messages(sender)`,
   `invitations(creator_id)`.
 
-## Batch 2 (pending `REDIS_URL` — Upstash free tier)
+## Batch 2 — Redis + BullMQ (implemented, gated on `REDIS_URL`)
 
-Gated entirely on the env var being present; without it everything runs
-exactly as batch 1:
+Upstash free tier (ap-south-1). Without the env var everything degrades to
+batch-1 behavior; with it:
 
-1. Redis-backed `CounterStore` (rate limits shared across instances).
-2. Cache layer for profiles/contacts/privacy/flags with TTL + write-through
-   invalidation.
-3. `@socket.io/redis-adapter` — multi-instance compatible, not clustered.
-4. BullMQ: `push` queue (retry/backoff/DLQ/priorities) + `maintenance`
-   queue (expired invites, stale sessions, old failed-login rows). Workers
-   run in-process behind a separate entrypoint so they can move to a Render
-   background worker without code changes.
-5. Queue depth/failures + Redis health wired into the admin dashboard.
+1. **BullMQ, two queues.** `push`: one job per device, priority (ringing
+   call = 1), 4 attempts with exponential backoff, failed set = DLQ kept a
+   week. `system`: named jobs — `audit` (admin + user security events,
+   durable without blocking the caller) and `cleanup` (6-hourly scheduler,
+   prunes failed_logins >30d, push_log >90d, revoked sessions >90d).
+   Expired invites are deliberately kept so invite analytics stay honest;
+   audit tables are kept forever. Live traffic (messages, typing, presence,
+   receipts) never touches a queue.
+2. **Workers**: in-process by default; jobs persist in Redis so restarts
+   lose nothing. `server/worker.ts` is the standalone entrypoint for a
+   future dedicated Render worker (start-command change only). Idle
+   blocking polls run at 60s (Upstash bills per command) but a new job
+   still wakes a worker instantly.
+3. **Scale-out mode** (`REDIS_SCALE_OUT=1`, default off): Socket.IO Redis
+   adapter + shared Redis rate-limit counters (fail-open). Off on a single
+   instance because the Mumbai↔Oregon round trip (~250ms) would tax every
+   broadcast/packet for zero consistency gain — this is also why hot-path
+   caches stay in-memory rather than in Redis for now.
+4. **Monitoring**: real Redis PING health in the dashboard (Redis down can
+   only drag overall health to "warning" since everything falls back to
+   direct calls) + live per-queue pending/failed(DLQ)/completed counts.
+5. **Analytics aggregation deferred**: admin stats run live against indexed
+   queries; a daily rollup table adds value only when raw-table scans get
+   slow. Revisit at real scale.
 
 ## Migration guide
 

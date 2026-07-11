@@ -8,6 +8,7 @@ import {
 import { online, known, privacyCache, webauthnChallenges } from '../state.js'
 import { configNumber } from '../flags.js'
 import { log } from '../log.js'
+import { enqueueSecurityAudit } from '../queue.js'
 import type { AppSocket, ConnectionCtx, PrivacyLevel, PasskeySummary, PasskeyCredentialRow } from '../types.js'
 
 const passkeySummary = (rows: PasskeyCredentialRow[]): PasskeySummary[] =>
@@ -25,7 +26,7 @@ export function registerSettings(socket: AppSocket, ctx: ConnectionCtx): void {
   const audit = (event: string, detail: string | null = null) => {
     const from = clientId()
     if (!from) return
-    store.logSecurityEvent(randomUUID(), from, event, detail, ctx.ip)
+    enqueueSecurityAudit(randomUUID(), from, event, detail, ctx.ip)
     log.audit.info({ userId: from, event, detail }, 'security event')
   }
 
