@@ -179,8 +179,27 @@ function SectionHead({ icon, title, children }: { icon: React.ReactNode; title: 
   )
 }
 
+type SectionKey = 'overview' | 'growth' | 'messaging' | 'calls' | 'notifications' | 'auth' | 'moderation' | 'users' | 'flags' | 'config' | 'audit'
+
+const NAV: { key: SectionKey; label: string; icon: React.ReactNode }[] = [
+  { key: 'overview', label: 'Overview', icon: Icon.shield },
+  { key: 'growth', label: 'User Growth', icon: Icon.users },
+  { key: 'messaging', label: 'Messaging', icon: Icon.send },
+  { key: 'calls', label: 'Calling', icon: Icon.call },
+  { key: 'notifications', label: 'Notifications', icon: Icon.bell },
+  { key: 'auth', label: 'Auth & Security', icon: Icon.key },
+  { key: 'moderation', label: 'Moderation', icon: Icon.flag },
+  { key: 'users', label: 'Users', icon: Icon.profile },
+  { key: 'flags', label: 'Feature Flags', icon: Icon.settings },
+  { key: 'config', label: 'System Config', icon: Icon.settings },
+  { key: 'audit', label: 'Audit Log', icon: Icon.info },
+]
+
+const SECTION_STORE = 'sable-admin-section'
+
 export function AdminPage() {
   const [key, setKey] = useState<string | null>(() => sessionStorage.getItem(KEY_STORE))
+  const [section, setSection] = useState<SectionKey>(() => (sessionStorage.getItem(SECTION_STORE) as SectionKey) || 'overview')
   const [input, setInput] = useState('')
   const [stats, setStats] = useState<Stats | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -292,6 +311,8 @@ export function AdminPage() {
       })
   }
 
+  const goToSection = (s: SectionKey) => { setSection(s); sessionStorage.setItem(SECTION_STORE, s) }
+
   const sortHeader = (col: string, label: string) => (
     <th className="admin-sortable" onClick={() => { setUserSort(col); setUserDir(userSort === col && userDir === 'desc' ? 'asc' : 'desc'); setUserPage(0) }}>
       {label}{userSort === col ? (userDir === 'desc' ? ' ↓' : ' ↑') : ''}
@@ -359,6 +380,22 @@ export function AdminPage() {
         </div>
       </header>
 
+      <div className="admin-shell">
+        <nav className="admin-sidebar">
+          {NAV.map((n) => (
+            <button
+              key={n.key}
+              type="button"
+              className={`admin-nav-item ${section === n.key ? 'active' : ''}`}
+              onClick={() => goToSection(n.key)}
+            >
+              {n.icon}{n.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="admin-main">
+      {section === 'overview' && <>
       {/* 1. Platform Health */}
       <section className="admin-section">
         <SectionHead icon={Icon.shield} title="Platform Health" />
@@ -416,6 +453,25 @@ export function AdminPage() {
         )}
       </section>
 
+      {/* Online now */}
+      <section className="admin-section">
+        <SectionHead icon={Icon.globe} title={`Online now (${stats.online.count})`} />
+        {stats.online.count === 0 ? (
+          <p className="hint">No one is connected right now.</p>
+        ) : (
+          <div className="admin-online">
+            {stats.online.users.map((u) => (
+              <span key={u.id} className="admin-chip">
+                <span className="avatar small-avatar" style={{ background: avatarBg(u.id), color: '#fff' }}>{u.name.slice(0, 2).toUpperCase()}</span>
+                {u.name}{u.username ? ` · @${u.username}` : ''}
+              </span>
+            ))}
+          </div>
+        )}
+      </section>
+      </>}
+
+      {section === 'growth' && <>
       {/* 3. User Growth */}
       <section className="admin-section">
         <SectionHead icon={Icon.users} title="User Growth" />
@@ -435,7 +491,9 @@ export function AdminPage() {
           <DayChart title="Logins" points={stats.series.logins} />
         </div>
       </section>
+      </>}
 
+      {section === 'messaging' && <>
       {/* 4. Messaging Analytics */}
       <section className="admin-section">
         <SectionHead icon={Icon.send} title="Messaging Analytics" />
@@ -449,7 +507,9 @@ export function AdminPage() {
           <DayChart title="Messages relayed" points={stats.series.messages} />
         </div>
       </section>
+      </>}
 
+      {section === 'calls' && <>
       {/* 5. Calling Analytics */}
       <section className="admin-section">
         <SectionHead icon={Icon.call} title="Calling Analytics" />
@@ -483,7 +543,9 @@ export function AdminPage() {
           <StatCard label="Direct P2P Usage" value={`${(100 - t.turnUsagePct).toFixed(1)}%`} />
         </div>
       </section>
+      </>}
 
+      {section === 'notifications' && <>
       {/* 7. Notification Analytics */}
       <section className="admin-section">
         <SectionHead icon={Icon.bell} title="Notification Analytics" />
@@ -497,7 +559,9 @@ export function AdminPage() {
           <StatCard label="Active Push Devices" value={t.activePushDevices} />
         </div>
       </section>
+      </>}
 
+      {section === 'auth' && <>
       {/* 8. Authentication Analytics */}
       <section className="admin-section">
         <SectionHead icon={Icon.key} title="Authentication Analytics" />
@@ -548,7 +612,9 @@ export function AdminPage() {
         )}
         <p className="hint">IPs with 10+ failed attempts in 10 minutes are already rejected outright at login — this list is everything short of that threshold.</p>
       </section>
+      </>}
 
+      {section === 'moderation' && <>
       {/* 9. Moderation */}
       <section className="admin-section">
         <SectionHead icon={Icon.flag} title="Moderation" />
@@ -579,7 +645,9 @@ export function AdminPage() {
           </div>
         )}
       </section>
+      </>}
 
+      {section === 'users' && <>
       {/* 10. User Management */}
       <section className="admin-section">
         <SectionHead icon={Icon.profile} title={`Users (${userData?.total ?? '…'})`}>
@@ -634,7 +702,9 @@ export function AdminPage() {
           </div>
         )}
       </section>
+      </>}
 
+      {section === 'flags' && <>
       {/* 12. Feature Flags */}
       <section className="admin-section">
         <SectionHead icon={Icon.settings} title="Feature Flags" />
@@ -649,7 +719,9 @@ export function AdminPage() {
           ))}
         </div>
       </section>
+      </>}
 
+      {section === 'config' && <>
       {/* 13. System Configuration */}
       <section className="admin-section">
         <SectionHead icon={Icon.settings} title="System Configuration" />
@@ -665,7 +737,9 @@ export function AdminPage() {
           ))}
         </div>
       </section>
+      </>}
 
+      {section === 'audit' && <>
       {/* 11. Audit Log */}
       <section className="admin-section">
         <SectionHead icon={Icon.info} title="Audit Log" />
@@ -686,23 +760,9 @@ export function AdminPage() {
           </div>
         )}
       </section>
-
-      {/* Online now */}
-      <section className="admin-section">
-        <SectionHead icon={Icon.globe} title={`Online now (${stats.online.count})`} />
-        {stats.online.count === 0 ? (
-          <p className="hint">No one is connected right now.</p>
-        ) : (
-          <div className="admin-online">
-            {stats.online.users.map((u) => (
-              <span key={u.id} className="admin-chip">
-                <span className="avatar small-avatar" style={{ background: avatarBg(u.id), color: '#fff' }}>{u.name.slice(0, 2).toUpperCase()}</span>
-                {u.name}{u.username ? ` · @${u.username}` : ''}
-              </span>
-            ))}
-          </div>
-        )}
-      </section>
+      </>}
+        </div>
+      </div>
     </div>
   )
 }

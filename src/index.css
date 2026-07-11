@@ -2776,12 +2776,12 @@ video.media { width: min(320px, 62vw); }
 
 .admin-page {
   min-height: 100dvh;
-  max-width: 1100px;
+  max-width: 1320px;
   margin: 0 auto;
   padding: 24px clamp(16px, 3vw, 32px) 64px;
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 24px;
 }
 
 .admin-header {
@@ -2794,6 +2794,65 @@ video.media { width: min(320px, 62vw); }
 }
 
 .admin-header-actions { display: flex; align-items: center; gap: 8px; }
+
+.admin-shell {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  flex: 1;
+  min-height: 0;
+}
+
+.admin-sidebar {
+  position: sticky;
+  top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 208px;
+  flex-shrink: 0;
+}
+
+.admin-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.87rem;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.admin-nav-item:hover { background: var(--chip-bg-hover); color: var(--text); }
+.admin-nav-item.active { background: var(--accent-soft); color: var(--accent); }
+.admin-nav-item svg { width: 17px; height: 17px; flex-shrink: 0; }
+
+.admin-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+@media (max-width: 860px) {
+  .admin-shell { flex-direction: column; }
+  .admin-sidebar {
+    position: static;
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 6px;
+    padding-bottom: 6px;
+  }
+  .admin-nav-item { width: auto; flex-shrink: 0; white-space: nowrap; }
+}
 
 .admin-updated { color: var(--muted); font-size: 0.8rem; }
 
