@@ -533,7 +533,7 @@ export function AdminPage() {
       {/* 6. Cloudflare TURN Analytics */}
       <section className="admin-section">
         <SectionHead icon={Icon.globe} title="Cloudflare TURN Analytics" />
-        <p className="hint" style={{ marginTop: 10 }}>
+        <p className="hint my-2">
           Bandwidth and per-session relay metrics need Cloudflare's own API (not configured here) — what's below is
           derived from this app's own call telemetry.
         </p>
